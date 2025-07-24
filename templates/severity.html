@@ -1,0 +1,53 @@
+<style>
+  body {
+    background: linear-gradient(135deg, #f8fafc 0%, #e0e7ef 100%);
+    min-height: 100vh;
+    margin: 0;
+    font-family: 'Segoe UI', 'Prompt', sans-serif;
+  }
+  .center-card {
+    max-width: 400px;
+    margin: 60px auto;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 6px 32px rgba(0,0,0,0.10);
+    padding: 36px 32px 28px 32px;
+    text-align: center;
+  }
+  h3 {
+    margin-bottom: 28px;
+    color: #2d3748;
+    font-weight: 600;
+  }
+  .form-range {
+    width: 100%;
+    accent-color: #0d6efd;
+    margin-bottom: 10px;
+  }
+  #level {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #0d6efd;
+    margin-left: 8px;
+  }
+  .btn-primary {
+    width: 100%;
+    padding: 12px 0;
+    font-size: 1.1rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(13,110,253,0.08);
+    transition: background 0.2s;
+  }
+  .btn-primary:hover {
+    background: #0b5ed7;
+  }
+</style>
+
+<div class="center-card">
+  <form method="POST" action="/check_condition">
+    <h3>เลือกระดับความรุนแรงของอาการ (1-10)</h3>
+    <input type="range" name="severity" min="1" max="10" value="5" class="form-range" oninput="level.value = this.value">
+    <p>ระดับ: <output id="level">5</output></p>
+    <button type="submit" class="btn btn-primary">ถัดไป</button>
+  </form>
+</div>
