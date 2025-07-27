@@ -91,7 +91,6 @@ def login():
             conn.close()
     return render_template('login.html')
 
-
 @app.route('/select_symptom', methods=['POST'])
 @require_login
 def select_symptom():
@@ -106,21 +105,19 @@ def select_symptom():
     cursor.execute("INSERT INTO symptoms (user_id, symptom_type_id) VALUES (%s, %s)", (user_id, symptom_type_id))
     conn.commit()
 
-    # ✅ ดึงข้อมูล flags จาก symptom_types
-    cursor.execute("""
-        SELECT ask_has_fever, has_fever_logic, skip_severity 
-        FROM symptom_types 
-        WHERE id = %s
-    """, (symptom_type_id,))
+    # ✅ log_question: ผู้ใช้เลือกอาการอะไร
+    cursor.execute("SELECT name, ask_has_fever, has_fever_logic, skip_severity FROM symptom_types WHERE id = %s", (symptom_type_id,))
     row = cursor.fetchone()
-    cursor.close()
-    conn.close()
 
     if not row:
+        cursor.close()
+        conn.close()
         flash("ไม่พบอาการนี้ในระบบ", "error")
         return redirect('/dashboard')
 
-    ask_has_fever, has_fever_logic, skip_severity = row
+    symptom_name, ask_has_fever, has_fever_logic, skip_severity = row
+    cursor.close()
+    conn.close()
 
     # ✅ Flow: ถามมีไข้ → ถามปวดกล้ามเนื้อ → ข้าม severity → ถามตั้งครรภ์
     if ask_has_fever:
@@ -165,10 +162,6 @@ def question_fever():
     if request.method == 'POST':
         muscle_pain = request.form.get('muscle_pain') == 'yes'
         session['muscle_pain'] = muscle_pain
-
-        # ✅ บันทึกคำตอบลง question_logs
-        log_question(session['user_id'], "ปวดเมื่อยกล้ามเนื้อหรือไม่", "ปวด" if muscle_pain else "ไม่ปวด")
-
         # ✅ บันทึกค่าลงตาราง symptoms
         conn = get_db()
         cursor = conn.cursor()
@@ -205,6 +198,7 @@ def log_user_action(user_id, action):
     conn.commit()
     cursor.close()
     conn.close()
+    print(f"[log_user_action] user_id: {user_id}, action: {action}")
 
 # ✅ คุณสามารถนำวิธีแก้จาก /submit_severity ไปใช้ในฟังก์ชันอื่นๆ ที่มีการ update ด้วย ORDER BY ได้เลย
 
@@ -238,7 +232,7 @@ def submit_severity():
     conn.close()
 
     session['severity'] = severity  # 👈 สำคัญ
-    log_user_action(user_id, f"select level symptom {severity}/10")
+    
 
     return redirect('/check_condition')  # 👈 ส่งผู้ใช้ไปต่อ
 
@@ -267,7 +261,6 @@ def question_pregnant():
         pregnant = request.form.get('pregnant')  # yes / no
         is_pregnant = pregnant == 'yes'
         session['is_pregnant'] = is_pregnant
-        log_question(session['user_id'], "กำลังตั้งครรภ์หรือไม่", "ตั้งครรภ์" if is_pregnant else "ไม่ตั้งครรภ์")
         user_id = session.get('user_id')
         severity = session.get('severity')
         allergy = session.get('paracetamol_allergy', False)
@@ -336,7 +329,6 @@ def question_allergy():
         allergy = request.form.get('allergy')  # "yes" หรือ "no"
         is_allergy = allergy == 'yes'
         session['paracetamol_allergy'] = is_allergy
-        log_question(session['user_id'], "แพ้ยาพาราเซตามอลหรือไม่", "แพ้" if is_allergy else "ไม่แพ้")
         user_id = session.get('user_id')
         severity = session.get('severity')
         is_pregnant = session.get('is_pregnant', False)
@@ -416,7 +408,6 @@ def question_has_fever():
     if request.method == 'POST':
         has_fever = request.form.get('has_fever') == 'yes'
         session['has_fever'] = has_fever
-        log_question(session['user_id'], "มีไข้หรือไม่", "มีไข้" if has_fever else "ไม่มีไข้")
         if has_fever:
             return redirect('/question_fever')
         else:
@@ -502,19 +493,6 @@ def recommend_medicine():
         extra = "คุณอยู่ระหว่างตั้งครรภ์ โปรดปรึกษาแพทย์ก่อนใช้ยา"
 
     return render_template('recommend_result.html', medicine=medicine, extra=extra)
-
-def log_question(user_id, question, answer):
-    conn = get_db()
-    if conn is None:
-        return
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO question_logs (user_id, question, answer) 
-        VALUES (%s, %s, %s)
-    """, (user_id, question, answer))
-    conn.commit()
-    cursor.close()
-    conn.close()
 
 
 @app.route('/severity')
