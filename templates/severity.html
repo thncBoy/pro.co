@@ -1,53 +1,87 @@
-<style>
-  body {
-    background: linear-gradient(135deg, #f8fafc 0%, #e0e7ef 100%);
-    min-height: 100vh;
-    margin: 0;
-    font-family: 'Segoe UI', 'Prompt', sans-serif;
-  }
-  .center-card {
-    max-width: 400px;
-    margin: 60px auto;
-    background: #fff;
-    border-radius: 18px;
-    box-shadow: 0 6px 32px rgba(0,0,0,0.10);
-    padding: 36px 32px 28px 32px;
-    text-align: center;
-  }
-  h3 {
-    margin-bottom: 28px;
-    color: #2d3748;
-    font-weight: 600;
-  }
-  .form-range {
-    width: 100%;
-    accent-color: #0d6efd;
-    margin-bottom: 10px;
-  }
-  #level {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #0d6efd;
-    margin-left: 8px;
-  }
-  .btn-primary {
-    width: 100%;
-    padding: 12px 0;
-    font-size: 1.1rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(13,110,253,0.08);
-    transition: background 0.2s;
-  }
-  .btn-primary:hover {
-    background: #0b5ed7;
-  }
-</style>
-
-<div class="center-card">
-  <form method="POST" action="/check_condition">
-    <h3>เลือกระดับความรุนแรงของอาการ (1-10)</h3>
-    <input type="range" name="severity" min="1" max="10" value="5" class="form-range" oninput="level.value = this.value">
-    <p>ระดับ: <output id="level">5</output></p>
-    <button type="submit" class="btn btn-primary">ถัดไป</button>
-  </form>
-</div>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>เลือกระดับความปวด</title>
+    <style>
+        .pain-scale-container {
+            background: #fff;
+            border-radius: 18px;
+            padding: 32px;
+            box-shadow: 0 2px 18px #0001;
+            max-width: 440px;
+            margin: 60px auto 0;
+            text-align: center;
+        }
+        .pain-label {
+            font-size: 18px;
+            margin-bottom: 16px;
+        }
+        .pain-scale {
+            display: flex;
+            justify-content: space-between;
+            margin: 22px 0 12px 0;
+        }
+        .pain-btn {
+            width: 38px;
+            height: 38px;
+            border: none;
+            border-radius: 50%;
+            background: #e0e7ff;
+            color: #312e81;
+            font-size: 18px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .pain-btn.selected,
+        .pain-btn:hover {
+            background: #6366f1;
+            color: #fff;
+        }
+        .pain-note {
+            font-size: 15px;
+            color: #666;
+            margin-top: 12px;
+        }
+        .pain-submit {
+            margin-top: 20px;
+            background: #10b981;
+            color: #fff;
+            padding: 10px 26px;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .pain-submit:hover { background: #047857; }
+    </style>
+    <script>
+        function selectPainLevel(val) {
+            document.getElementById('severity').value = val;
+            var btns = document.querySelectorAll('.pain-btn');
+            btns.forEach(btn => btn.classList.remove('selected'));
+            btns[val-1].classList.add('selected');
+        }
+    </script>
+</head>
+<body style="background:#f6f7fb;">
+    <form action="/submit_severity" method="post">
+        <div class="pain-scale-container">
+            <div class="pain-label">เลือก <b>ระดับความปวด</b> ของคุณ</div>
+            <div class="pain-scale">
+                {% for i in range(1, 11) %}
+                <button type="button" class="pain-btn" onclick="selectPainLevel({{i}})">{{i}}</button>
+                {% endfor %}
+            </div>
+            <input type="hidden" name="severity" id="severity" required>
+            <div class="pain-note">
+                1 = ปวดน้อย &nbsp; • &nbsp; 5 = ปวดปานกลาง &nbsp; • &nbsp; 10 = ปวดมากที่สุด
+            </div>
+            <div style="margin-top:18px;">
+                <textarea name="note" placeholder="หมายเหตุเพิ่มเติม (ถ้ามี)" style="width:96%;height:45px;font-size:15px;border-radius:8px;border:1px solid #ddd;padding:6px;"></textarea>
+            </div>
+            <button class="pain-submit" type="submit">บันทึก</button>
+        </div>
+    </form>
+</body>
+</html>

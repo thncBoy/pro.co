@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
-from connDB import supabase
+from connDB import supabase  # import เชื่อม Supabase
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-super-secret-key-change-this-in-production')
@@ -20,7 +20,7 @@ def log_user_action(user_id, action):
     if action in ("login", "logout"):
         supabase.table('user_logs').insert({'user_id': user_id, 'action': action}).execute()
 
-# **ปรับตรงนี้: update symptoms ด้วย symptom_id จาก session**
+# Utility function สำหรับ update symptoms
 def update_current_symptom(update_dict):
     symptom_id = session.get('symptom_id')
     if symptom_id:
@@ -89,13 +89,13 @@ def select_symptom():
     session['symptom_type_id'] = symptom_type_id
     user_id = session['user_id']
 
-    # Insert symptoms แล้วเก็บ symptom_id ไว้ใน session
+    # Insert symptoms และเก็บ id ลง session
     res = supabase.table('symptoms').insert({'user_id': user_id, 'symptom_type_id': symptom_type_id}).execute()
     if res.data and len(res.data) > 0:
         session['symptom_id'] = res.data[0]['id']
 
-    # ดึงรายละเอียดอาการจากฐานข้อมูล
-    q = supabase.table('symptom_types').select('name,skip_severity').eq('id', symptom_type_id).execute()
+    # ดึงข้อมูลอาการ
+    q = supabase.table('symptom_types').select('name,skip_severity,suggested_medicine').eq('id', symptom_type_id).execute()
     if not q.data:
         flash("ไม่พบอาการนี้ในระบบ", "error")
         return redirect('/dashboard')
@@ -103,18 +103,28 @@ def select_symptom():
     row = q.data[0]
     name = row.get('name', '')
     skip_severity = row.get('skip_severity', False)
+    med = row.get('suggested_medicine', '')
 
-    # === FLOW SPLIT ===
-    if name in ["ปวดกล้ามเนื้อ", "ปวดหัว", "ไข้ขึ้น"]:
-        # ถามไข้ก่อน
-        return redirect('/question_has_fever')
+    # ข้อ 2: อ่อนเพลีย (หรืออาการที่จ่ายยาเฉพาะ เช่น "อ่อนเพลีย" ให้เกลือแร่ ORS ทันที)
+    if name == "อ่อนเพลีย":
+        update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
+        return render_template('recommend_result.html', medicine=med)
+    # ข้อ 3: ไข้ขึ้น → ข้ามถามไข้ เพราะรู้ว่า "มีไข้"
+    elif name == "ไข้ขึ้น":
+        session['has_fever'] = True
+        update_current_symptom({"has_fever": True})
+        return redirect('/question_fever')  # ไปถามปวดกล้ามเนื้อเลย
+    # ข้อ 4: กรดไหลย้อน/อาการที่ skip_severity
     elif skip_severity:
-        # กรดไหลย้อน, อ่อนเพลีย, ปวดตึง
         return redirect('/question_pregnant')
+    # ข้อ 1: ปวดกล้ามเนื้อ (ถามไข้เพื่อเช็คต่อ)
+    elif name == "ปวดกล้ามเนื้อ":
+        return redirect('/question_has_fever')
+    # อื่นๆ (ถามไข้ถ้า ask_has_fever, ไม่งั้นไป severity เลย)
     else:
-        # อื่น ๆ (ปวดท้อง, ประจำเดือน, ฟันผุ/ปวดฟัน)
-        return redirect('/severity')
-    
+        # คุณอาจเพิ่ม logic จาก field ask_has_fever ใน symptom_types ด้วย
+        return redirect('/question_has_fever')
+
 @app.route('/question_has_fever', methods=['GET', 'POST'])
 @require_login
 def question_has_fever():
@@ -122,18 +132,20 @@ def question_has_fever():
         has_fever = request.form.get('has_fever') == 'yes'
         session['has_fever'] = has_fever
         update_current_symptom({"has_fever": has_fever})
-
-        # เช็คชื่ออาการ
         symptom_type_id = session.get('symptom_type_id')
         q = supabase.table('symptom_types').select('name').eq('id', symptom_type_id).execute()
         name = q.data[0]['name'] if q.data else ""
 
+        # ข้อ 1: ถ้า "ปวดกล้ามเนื้อ" + มีไข้ ให้จบ flow เลย
         if name == "ปวดกล้ามเนื้อ":
-            # ไม่ถามปวดกล้ามเนื้อซ้ำ ไปถาม severity ต่อเลย
-            return redirect('/severity')
-        elif name in ["ปวดหัว", "ไข้ขึ้น"]:
             if has_fever:
-                # ถามปวดกล้ามเนื้อ
+                update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
+                return render_template('advise_doctor.html', reason="ปวดกล้ามเนื้อ + มีไข้ อาจเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
+            else:
+                return redirect('/severity')
+        # ถ้าอาการอื่นที่ถามไข้ ถ้ามีไข้ไปถามปวดกล้ามเนื้อ, ถ้าไม่มีไป severity
+        elif name in ["ปวดหัว"]:
+            if has_fever:
                 return redirect('/question_fever')
             else:
                 return redirect('/severity')
@@ -148,9 +160,9 @@ def question_fever():
         muscle_pain = request.form.get('muscle_pain') == 'yes'
         session['muscle_pain'] = muscle_pain
         update_current_symptom({"muscle_pain": muscle_pain})
+        # ถ้าปวดกล้ามเนื้อด้วย + มีไข้ แนะนำพบแพทย์
         if muscle_pain:
-            # แนะนำพบแพทย์ (case อาการหนัก)
-            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
+            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดเมื่อยกล้ามเนื้อ+ไข้)"})
             return render_template('advise_doctor.html', reason="คุณมีอาการปวดเมื่อยกล้ามเนื้อร่วมกับไข้ อาจเสี่ยงเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
         else:
             return redirect('/question_pregnant')
@@ -168,6 +180,7 @@ def submit_severity():
     note = request.form.get('note')
     update_current_symptom({"severity": severity, "severity_note": note})
     session['severity'] = severity
+    # ถ้า severity >= 5 แนะนำพบแพทย์
     if severity >= 5:
         update_current_symptom({"severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
         return render_template('advise_doctor.html', reason="อาการรุนแรง")
@@ -181,15 +194,17 @@ def question_pregnant():
         pregnant = request.form.get('pregnant') == 'yes'
         session['is_pregnant'] = pregnant
         severity = session.get('severity')
-        allergy = session.get('paracetamol_allergy', False)
+        symptom_type_id = session.get('symptom_type_id')
+        q = supabase.table('symptom_types').select('name', 'suggested_medicine').eq('id', symptom_type_id).execute()
+        name = q.data[0]['name'] if q.data else ""
+        med = q.data[0]['suggested_medicine'] if q.data else ""
         if pregnant:
-            update_current_symptom({
-                "severity": severity,
-                "severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)",
-                "is_pregnant": pregnant,
-                "paracetamol_allergy": allergy
-            })
+            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)", "is_pregnant": True})
             return render_template('advise_doctor.html', reason="อยู่ระหว่างตั้งครรภ์")
+        # ข้อ 4: ถ้าอาการนี้ไม่ต้องถามแพ้ยา (เช่น กรดไหลย้อน)
+        elif name == "กรดไหลย้อน":
+            update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
+            return render_template('recommend_result.html', medicine=med)
         else:
             return redirect('/question_allergy')
     return render_template('pregnant.html')
@@ -203,6 +218,7 @@ def question_allergy():
         severity = session.get('severity')
         is_pregnant = session.get('is_pregnant', False)
         symptom_type_id = session.get('symptom_type_id')
+        # ถ้าแพ้พารา แนะนำพบแพทย์
         if allergy:
             update_current_symptom({
                 "severity": severity,
@@ -227,60 +243,7 @@ def question_allergy():
             return render_template("recommend_result.html", medicine=medicine)
     return render_template("allergy.html")
 
-def update_current_symptom(update_dict):
-    """
-    update_dict: dict ของ field ที่ต้องการอัปเดต
-    ใช้ symptom_id ที่เก็บใน session เพื่อ update row ในตาราง symptoms
-    """
-    symptom_id = session.get('symptom_id')
-    if symptom_id:
-        supabase.table('symptoms').update(update_dict).eq('id', symptom_id).execute()
-    else:
-        print("No symptom_id in session, cannot update symptom efficiently")
-
-
-@app.route('/recommend_medicine')
-@require_login
-def recommend_medicine():
-    symptom_type_id = session.get('symptom_type_id')
-    severity = session.get('severity', 0)
-    is_pregnant = session.get('is_pregnant', False)
-    allergy = session.get('paracetamol_allergy', False)
-    has_fever = session.get('has_fever', False)
-    extra = ""
-    q = supabase.table('symptom_types').select('suggested_medicine').eq('id', symptom_type_id).execute()
-    if allergy or is_pregnant:
-        medicine = "แนะนำพบแพทย์"
-        update_current_symptom({
-            "severity": severity,
-            "severity_note": "แนะนำพบแพทย์ (แพ้ยา/ตั้งครรภ์)",
-            "is_pregnant": is_pregnant,
-            "paracetamol_allergy": allergy,
-            "has_fever": has_fever
-        })
-    elif q.data:
-        medicine = q.data[0]['suggested_medicine']
-        update_current_symptom({
-            "severity": severity,
-            "severity_note": medicine,
-            "is_pregnant": is_pregnant,
-            "paracetamol_allergy": allergy,
-            "has_fever": has_fever
-        })
-    else:
-        medicine = "พาราเซตามอล 500mg"
-        update_current_symptom({
-            "severity": severity,
-            "severity_note": medicine,
-            "is_pregnant": is_pregnant,
-            "paracetamol_allergy": allergy,
-            "has_fever": has_fever
-        })
-    if allergy:
-        extra = "คุณแพ้ยาพาราเซตามอล ควรพบแพทย์เพื่อรับคำแนะนำเพิ่มเติม"
-    elif is_pregnant:
-        extra = "คุณอยู่ระหว่างตั้งครรภ์ โปรดปรึกษาแพทย์ก่อนใช้ยา"
-    return render_template('recommend_result.html', medicine=medicine, extra=extra)
+# สามารถเพิ่ม recommend_medicine สำหรับหน้ารวม/สรุป หรือ dashboard เพิ่มเติมได้
 
 if __name__ == '__main__':
     app.run(debug=True)
