@@ -6,9 +6,6 @@ from connDB import supabase
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-super-secret-key-change-this-in-production')
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600
-app.config['SESSION_COOKIE_SECURE'] = False
-app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 def require_login(f):
     @wraps(f)
@@ -20,20 +17,16 @@ def require_login(f):
     return decorated_function
 
 def log_user_action(user_id, action):
-    # เก็บเฉพาะ login/logout
     if action in ("login", "logout"):
         supabase.table('user_logs').insert({'user_id': user_id, 'action': action}).execute()
 
-def update_latest_symptom(user_id, update_dict):
-    q = supabase.table('symptoms').select('id').eq('user_id', user_id).order('id', desc=True).limit(1).execute()
-    if q.data:
-        symptom_id = q.data[0]['id']
+# **ปรับตรงนี้: update symptoms ด้วย symptom_id จาก session**
+def update_current_symptom(update_dict):
+    symptom_id = session.get('symptom_id')
+    if symptom_id:
         supabase.table('symptoms').update(update_dict).eq('id', symptom_id).execute()
-
-@app.route('/test_connect')
-def test_connect():
-    result = supabase.table('users').select('*').limit(5).execute()
-    return str(result.data)
+    else:
+        print("No symptom_id in session, cannot update symptom efficiently")
 
 @app.route('/')
 def home():
@@ -95,33 +88,55 @@ def select_symptom():
     symptom_type_id = int(request.form.get('symptom_id'))
     session['symptom_type_id'] = symptom_type_id
     user_id = session['user_id']
-    supabase.table('symptoms').insert({'user_id': user_id, 'symptom_type_id': symptom_type_id}).execute()
-    q = supabase.table('symptom_types').select('name,ask_has_fever,has_fever_logic,skip_severity').eq('id', symptom_type_id).execute()
+
+    # Insert symptoms แล้วเก็บ symptom_id ไว้ใน session
+    res = supabase.table('symptoms').insert({'user_id': user_id, 'symptom_type_id': symptom_type_id}).execute()
+    if res.data and len(res.data) > 0:
+        session['symptom_id'] = res.data[0]['id']
+
+    # ดึงรายละเอียดอาการจากฐานข้อมูล
+    q = supabase.table('symptom_types').select('name,skip_severity').eq('id', symptom_type_id).execute()
     if not q.data:
         flash("ไม่พบอาการนี้ในระบบ", "error")
         return redirect('/dashboard')
+
     row = q.data[0]
-    ask_has_fever = row.get('ask_has_fever', False)
-    has_fever_logic = row.get('has_fever_logic', False)
+    name = row.get('name', '')
     skip_severity = row.get('skip_severity', False)
-    if ask_has_fever:
+
+    # === FLOW SPLIT ===
+    if name in ["ปวดกล้ามเนื้อ", "ปวดหัว", "ไข้ขึ้น"]:
+        # ถามไข้ก่อน
         return redirect('/question_has_fever')
-    elif has_fever_logic:
-        return redirect('/question_fever')
     elif skip_severity:
+        # กรดไหลย้อน, อ่อนเพลีย, ปวดตึง
         return redirect('/question_pregnant')
     else:
+        # อื่น ๆ (ปวดท้อง, ประจำเดือน, ฟันผุ/ปวดฟัน)
         return redirect('/severity')
-
+    
 @app.route('/question_has_fever', methods=['GET', 'POST'])
 @require_login
 def question_has_fever():
     if request.method == 'POST':
         has_fever = request.form.get('has_fever') == 'yes'
         session['has_fever'] = has_fever
-        update_latest_symptom(session['user_id'], {"has_fever": has_fever})
-        if has_fever:
-            return redirect('/question_fever')
+        update_current_symptom({"has_fever": has_fever})
+
+        # เช็คชื่ออาการ
+        symptom_type_id = session.get('symptom_type_id')
+        q = supabase.table('symptom_types').select('name').eq('id', symptom_type_id).execute()
+        name = q.data[0]['name'] if q.data else ""
+
+        if name == "ปวดกล้ามเนื้อ":
+            # ไม่ถามปวดกล้ามเนื้อซ้ำ ไปถาม severity ต่อเลย
+            return redirect('/severity')
+        elif name in ["ปวดหัว", "ไข้ขึ้น"]:
+            if has_fever:
+                # ถามปวดกล้ามเนื้อ
+                return redirect('/question_fever')
+            else:
+                return redirect('/severity')
         else:
             return redirect('/severity')
     return render_template('question_has_fever.html')
@@ -132,12 +147,10 @@ def question_fever():
     if request.method == 'POST':
         muscle_pain = request.form.get('muscle_pain') == 'yes'
         session['muscle_pain'] = muscle_pain
-        update_latest_symptom(session['user_id'], {"has_fever": muscle_pain})
+        update_current_symptom({"muscle_pain": muscle_pain})
         if muscle_pain:
-            # **เพิ่มการบันทึก "แนะนำพบแพทย์"**
-            update_latest_symptom(session['user_id'], {
-                "severity_note": "แนะนำพบแพทย์ (ปวดเมื่อยกล้ามเนื้อ+ไข้)"
-            })
+            # แนะนำพบแพทย์ (case อาการหนัก)
+            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
             return render_template('advise_doctor.html', reason="คุณมีอาการปวดเมื่อยกล้ามเนื้อร่วมกับไข้ อาจเสี่ยงเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
         else:
             return redirect('/question_pregnant')
@@ -153,29 +166,10 @@ def severity():
 def submit_severity():
     severity = int(request.form.get('severity'))
     note = request.form.get('note')
-    user_id = session.get('user_id')
-    if not user_id:
-        return redirect('/login')
-    update_latest_symptom(user_id, {"severity": severity, "severity_note": note})
+    update_current_symptom({"severity": severity, "severity_note": note})
     session['severity'] = severity
-    return redirect('/check_condition')
-
-@app.route('/check_condition', methods=['GET', 'POST'])
-@require_login
-def check_condition():
-    if request.method == 'POST':
-        severity = int(request.form.get('severity'))
-        session['severity'] = severity
-    else:
-        severity = session.get('severity')
-    if severity is None:
-        return redirect('/severity')
     if severity >= 5:
-        # **บันทึก "แนะนำพบแพทย์"**
-        update_latest_symptom(session['user_id'], {
-            "severity": severity,
-            "severity_note": "แนะนำพบแพทย์ (severity >= 5)"
-        })
+        update_current_symptom({"severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
         return render_template('advise_doctor.html', reason="อาการรุนแรง")
     else:
         return redirect('/question_pregnant')
@@ -184,27 +178,19 @@ def check_condition():
 @require_login
 def question_pregnant():
     if request.method == 'POST':
-        pregnant = request.form.get('pregnant')
-        is_pregnant = pregnant == 'yes'
-        session['is_pregnant'] = is_pregnant
-        user_id = session.get('user_id')
+        pregnant = request.form.get('pregnant') == 'yes'
+        session['is_pregnant'] = pregnant
         severity = session.get('severity')
         allergy = session.get('paracetamol_allergy', False)
-        if severity is None:
-            return redirect('/severity')
-        if is_pregnant:
-            reason = "อยู่ระหว่างตั้งครรภ์"
-            # **บันทึก "แนะนำพบแพทย์"**
-            update_latest_symptom(user_id, {
+        if pregnant:
+            update_current_symptom({
                 "severity": severity,
-                "severity_note": f"แนะนำพบแพทย์ ({reason})",
-                "is_pregnant": is_pregnant,
+                "severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)",
+                "is_pregnant": pregnant,
                 "paracetamol_allergy": allergy
             })
-            log_user_action(user_id, "ตั้งครรภ์: ใช่")
-            return render_template('advise_doctor.html', reason=reason)
+            return render_template('advise_doctor.html', reason="อยู่ระหว่างตั้งครรภ์")
         else:
-            log_user_action(user_id, "ตั้งครรภ์: ไม่ใช่")
             return redirect('/question_allergy')
     return render_template('pregnant.html')
 
@@ -212,53 +198,50 @@ def question_pregnant():
 @require_login
 def question_allergy():
     if request.method == 'POST':
-        allergy = request.form.get('allergy')
-        is_allergy = allergy == 'yes'
-        session['paracetamol_allergy'] = is_allergy
-        user_id = session.get('user_id')
+        allergy = request.form.get('allergy') == 'yes'
+        session['paracetamol_allergy'] = allergy
         severity = session.get('severity')
         is_pregnant = session.get('is_pregnant', False)
         symptom_type_id = session.get('symptom_type_id')
-        if is_allergy:
-            reason = "แพ้ยาพาราเซตามอล"
-            # **บันทึก "แนะนำพบแพทย์"**
-            update_latest_symptom(user_id, {
+        if allergy:
+            update_current_symptom({
                 "severity": severity,
-                "severity_note": f"แนะนำพบแพทย์ ({reason})",
+                "severity_note": "แนะนำพบแพทย์ (แพ้พาราเซตามอล)",
                 "is_pregnant": is_pregnant,
-                "paracetamol_allergy": is_allergy
+                "paracetamol_allergy": allergy
             })
-            return render_template("advise_doctor.html", reason=reason)
-        elif is_pregnant:
-            reason = "อยู่ระหว่างตั้งครรภ์"
-            # **บันทึก "แนะนำพบแพทย์"**
-            update_latest_symptom(user_id, {
-                "severity": severity,
-                "severity_note": f"แนะนำพบแพทย์ ({reason})",
-                "is_pregnant": is_pregnant,
-                "paracetamol_allergy": is_allergy
-            })
-            return render_template("advise_doctor.html", reason=reason)
+            return render_template("advise_doctor.html", reason="แพ้ยาพาราเซตามอล")
         else:
+            # แนะนำยาตามฐานข้อมูล
             q = supabase.table('symptom_types').select('suggested_medicine').eq('id', symptom_type_id).execute()
             if q.data:
                 medicine = q.data[0]['suggested_medicine']
             else:
                 medicine = "พาราเซตามอล 500mg"
-            severity_note = f"แนะนำยา: {medicine}"
-            update_latest_symptom(user_id, {
+            update_current_symptom({
                 "severity": severity,
-                "severity_note": severity_note,
+                "severity_note": f"แนะนำยา: {medicine}",
                 "is_pregnant": is_pregnant,
-                "paracetamol_allergy": is_allergy
+                "paracetamol_allergy": allergy
             })
             return render_template("recommend_result.html", medicine=medicine)
     return render_template("allergy.html")
 
+def update_current_symptom(update_dict):
+    """
+    update_dict: dict ของ field ที่ต้องการอัปเดต
+    ใช้ symptom_id ที่เก็บใน session เพื่อ update row ในตาราง symptoms
+    """
+    symptom_id = session.get('symptom_id')
+    if symptom_id:
+        supabase.table('symptoms').update(update_dict).eq('id', symptom_id).execute()
+    else:
+        print("No symptom_id in session, cannot update symptom efficiently")
+
+
 @app.route('/recommend_medicine')
 @require_login
 def recommend_medicine():
-    user_id = session.get('user_id')
     symptom_type_id = session.get('symptom_type_id')
     severity = session.get('severity', 0)
     is_pregnant = session.get('is_pregnant', False)
@@ -268,17 +251,16 @@ def recommend_medicine():
     q = supabase.table('symptom_types').select('suggested_medicine').eq('id', symptom_type_id).execute()
     if allergy or is_pregnant:
         medicine = "แนะนำพบแพทย์"
-        # **บันทึก "แนะนำพบแพทย์"**
-        update_latest_symptom(user_id, {
+        update_current_symptom({
             "severity": severity,
-            "severity_note": f"แนะนำพบแพทย์ (แพ้ยา/ตั้งครรภ์)",
+            "severity_note": "แนะนำพบแพทย์ (แพ้ยา/ตั้งครรภ์)",
             "is_pregnant": is_pregnant,
             "paracetamol_allergy": allergy,
             "has_fever": has_fever
         })
     elif q.data:
         medicine = q.data[0]['suggested_medicine']
-        update_latest_symptom(user_id, {
+        update_current_symptom({
             "severity": severity,
             "severity_note": medicine,
             "is_pregnant": is_pregnant,
@@ -287,7 +269,7 @@ def recommend_medicine():
         })
     else:
         medicine = "พาราเซตามอล 500mg"
-        update_latest_symptom(user_id, {
+        update_current_symptom({
             "severity": severity,
             "severity_note": medicine,
             "is_pregnant": is_pregnant,
