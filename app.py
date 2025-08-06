@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
-from connDB import supabase  # import เชื่อม Supabase
+from connDB import supabase
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-super-secret-key-change-this-in-production')
@@ -20,13 +20,10 @@ def log_user_action(user_id, action):
     if action in ("login", "logout"):
         supabase.table('user_logs').insert({'user_id': user_id, 'action': action}).execute()
 
-# Utility function สำหรับ update symptoms
 def update_current_symptom(update_dict):
     symptom_id = session.get('symptom_id')
     if symptom_id:
         supabase.table('symptoms').update(update_dict).eq('id', symptom_id).execute()
-    else:
-        print("No symptom_id in session, cannot update symptom efficiently")
 
 @app.route('/')
 def home():
@@ -89,13 +86,12 @@ def select_symptom():
     session['symptom_type_id'] = symptom_type_id
     user_id = session['user_id']
 
-    # Insert symptoms และเก็บ id ลง session
     res = supabase.table('symptoms').insert({'user_id': user_id, 'symptom_type_id': symptom_type_id}).execute()
     if res.data and len(res.data) > 0:
         session['symptom_id'] = res.data[0]['id']
 
     # ดึงข้อมูลอาการ
-    q = supabase.table('symptom_types').select('name,skip_severity,suggested_medicine').eq('id', symptom_type_id).execute()
+    q = supabase.table('symptom_types').select('name,skip_severity,ask_has_fever,suggested_medicine').eq('id', symptom_type_id).execute()
     if not q.data:
         flash("ไม่พบอาการนี้ในระบบ", "error")
         return redirect('/dashboard')
@@ -103,27 +99,23 @@ def select_symptom():
     row = q.data[0]
     name = row.get('name', '')
     skip_severity = row.get('skip_severity', False)
+    ask_has_fever = row.get('ask_has_fever', True)
     med = row.get('suggested_medicine', '')
 
-    # ข้อ 2: อ่อนเพลีย (หรืออาการที่จ่ายยาเฉพาะ เช่น "อ่อนเพลีย" ให้เกลือแร่ ORS ทันที)
     if name == "อ่อนเพลีย":
         update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
-        return render_template('recommend_result.html', medicine=med)
-    # ข้อ 3: ไข้ขึ้น → ข้ามถามไข้ เพราะรู้ว่า "มีไข้"
+        session['medicine'] = med
+        return redirect('/recommend_medicine')
     elif name == "ไข้ขึ้น":
         session['has_fever'] = True
         update_current_symptom({"has_fever": True})
-        return redirect('/question_fever')  # ไปถามปวดกล้ามเนื้อเลย
-    # ข้อ 4: กรดไหลย้อน/อาการที่ skip_severity
+        return redirect('/question_fever')
     elif skip_severity:
         return redirect('/question_pregnant')
-    # ข้อ 1: ปวดกล้ามเนื้อ (ถามไข้เพื่อเช็คต่อ)
-    elif name == "ปวดกล้ามเนื้อ":
+    elif ask_has_fever:
         return redirect('/question_has_fever')
-    # อื่นๆ (ถามไข้ถ้า ask_has_fever, ไม่งั้นไป severity เลย)
     else:
-        # คุณอาจเพิ่ม logic จาก field ask_has_fever ใน symptom_types ด้วย
-        return redirect('/question_has_fever')
+        return redirect('/severity')  # ข้ามการถามไข้
 
 @app.route('/question_has_fever', methods=['GET', 'POST'])
 @require_login
@@ -136,14 +128,13 @@ def question_has_fever():
         q = supabase.table('symptom_types').select('name').eq('id', symptom_type_id).execute()
         name = q.data[0]['name'] if q.data else ""
 
-        # ข้อ 1: ถ้า "ปวดกล้ามเนื้อ" + มีไข้ ให้จบ flow เลย
         if name == "ปวดกล้ามเนื้อ":
             if has_fever:
                 update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
+                session['medicine'] = None  # ไม่แนะนำยา
                 return render_template('advise_doctor.html', reason="ปวดกล้ามเนื้อ + มีไข้ อาจเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
             else:
                 return redirect('/severity')
-        # ถ้าอาการอื่นที่ถามไข้ ถ้ามีไข้ไปถามปวดกล้ามเนื้อ, ถ้าไม่มีไป severity
         elif name in ["ปวดหัว"]:
             if has_fever:
                 return redirect('/question_fever')
@@ -160,9 +151,9 @@ def question_fever():
         muscle_pain = request.form.get('muscle_pain') == 'yes'
         session['muscle_pain'] = muscle_pain
         update_current_symptom({"muscle_pain": muscle_pain})
-        # ถ้าปวดกล้ามเนื้อด้วย + มีไข้ แนะนำพบแพทย์
         if muscle_pain:
             update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดเมื่อยกล้ามเนื้อ+ไข้)"})
+            session['medicine'] = None  # ไม่แนะนำยา
             return render_template('advise_doctor.html', reason="คุณมีอาการปวดเมื่อยกล้ามเนื้อร่วมกับไข้ อาจเสี่ยงเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
         else:
             return redirect('/question_pregnant')
@@ -180,9 +171,9 @@ def submit_severity():
     note = request.form.get('note')
     update_current_symptom({"severity": severity, "severity_note": note})
     session['severity'] = severity
-    # ถ้า severity >= 5 แนะนำพบแพทย์
     if severity >= 5:
         update_current_symptom({"severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
+        session['medicine'] = None  # ไม่แนะนำยา
         return render_template('advise_doctor.html', reason="อาการรุนแรง")
     else:
         return redirect('/question_pregnant')
@@ -200,14 +191,16 @@ def question_pregnant():
         med = q.data[0]['suggested_medicine'] if q.data else ""
         if pregnant:
             update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)", "is_pregnant": True})
+            session['medicine'] = None  # ไม่แนะนำยา
             return render_template('advise_doctor.html', reason="อยู่ระหว่างตั้งครรภ์")
-        # ข้อ 4: ถ้าอาการนี้ไม่ต้องถามแพ้ยา (เช่น กรดไหลย้อน)
         elif name == "กรดไหลย้อน":
             update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
-            return render_template('recommend_result.html', medicine=med)
+            session['medicine'] = med
+            return redirect('/recommend_medicine')
         else:
             return redirect('/question_allergy')
     return render_template('pregnant.html')
+
 
 @app.route('/question_allergy', methods=['GET', 'POST'])
 @require_login
@@ -218,7 +211,6 @@ def question_allergy():
         severity = session.get('severity')
         is_pregnant = session.get('is_pregnant', False)
         symptom_type_id = session.get('symptom_type_id')
-        # ถ้าแพ้พารา แนะนำพบแพทย์
         if allergy:
             update_current_symptom({
                 "severity": severity,
@@ -226,24 +218,75 @@ def question_allergy():
                 "is_pregnant": is_pregnant,
                 "paracetamol_allergy": allergy
             })
+            session['medicine'] = None  # ไม่แนะนำยา
             return render_template("advise_doctor.html", reason="แพ้ยาพาราเซตามอล")
         else:
-            # แนะนำยาตามฐานข้อมูล
             q = supabase.table('symptom_types').select('suggested_medicine').eq('id', symptom_type_id).execute()
             if q.data:
                 medicine = q.data[0]['suggested_medicine']
             else:
-                medicine = "พาราเซตามอล 500mg"
+                medicine = "ไทลินอล 500mg"
             update_current_symptom({
                 "severity": severity,
                 "severity_note": f"แนะนำยา: {medicine}",
                 "is_pregnant": is_pregnant,
                 "paracetamol_allergy": allergy
             })
-            return render_template("recommend_result.html", medicine=medicine)
+            session['medicine'] = medicine
+            return redirect('/recommend_medicine')
     return render_template("allergy.html")
 
-# สามารถเพิ่ม recommend_medicine สำหรับหน้ารวม/สรุป หรือ dashboard เพิ่มเติมได้
+def get_medicine_info(medicine):
+    medicine_db = {
+        "พาราเซตามอล 500mg": {
+            "image": "พาราเซตามอล 500mg.jpg",
+            "description": "ไทลินอล 500 มก. (Tylenol) เป็นยาพาราเซตามอลสำหรับลดไข้และบรรเทาอาการปวดทั่วไป เช่น ปวดหัว ปวดกล้ามเนื้อ ปวดฟัน",
+            "advice": "รับประทานครั้งละ 1-2 เม็ด ทุก 4-6 ชั่วโมงเมื่อมีอาการ ไม่ควรเกิน 8 เม็ดต่อวัน ห้ามใช้ในผู้ที่แพ้ยาพาราเซตามอล"
+        },
+        "เกลือแร่ ORS": {
+            "image": "เกลือแร่ ORS.jpg",
+            "description": "ORS หรือผงเกลือแร่ ใช้สำหรับชงดื่มเพื่อทดแทนการสูญเสียน้ำและเกลือแร่ในร่างกาย จากการท้องเสียหรืออาเจียน",
+            "advice": "ละลายผง 1 ซองในน้ำสะอาด 1 แก้ว ดื่มทีละน้อยตลอดวันจนกว่าอาการจะดีขึ้น"
+        },
+        "กาวิสคอน": {
+            "image": "กาวิสคอน.jpg",
+            "description": "กาวิสคอน (Gaviscon) ใช้บรรเทาอาการกรดไหลย้อน แสบร้อนกลางอก ลดกรดในกระเพาะอาหาร",
+            "advice": "รับประทานครั้งละ 10-20 มล. หลังอาหารและก่อนนอน"
+        }
+    }
+    return medicine_db.get(medicine, {
+        "image": "default.png",
+        "description": "ยาเพื่อบรรเทาอาการเบื้องต้น",
+        "advice": ""
+    })
+
+@app.route('/recommend_medicine')
+@require_login
+def recommend_medicine():
+    medicine = session.get('medicine')
+    if not medicine:
+        
+        flash("ไม่สามารถแสดงผลการแนะนำยาได้", "error")
+        return redirect('/dashboard')
+    info = get_medicine_info(medicine)
+    return render_template(
+        "recommend_result.html",
+        medicine=medicine,
+        image_name=info["image"],
+        description=info["description"],
+        advice=info["advice"]
+    )
+
+@app.route('/dispense_loading', methods=['POST'])
+@require_login
+def dispense_loading():
+    # ในอนาคตที่นี่จะสั่งจ่ายยาและรอ ESP8266 ส่งสถานะกลับ
+    return render_template("loading_dispense.html")  # สร้างหน้า loading_dispense.html ไว้แสดงสถานะกำลังจ่ายยา
+
+@app.route('/goodbye')
+def goodbye():
+    session.clear()
+    return render_template("goodbye.html")  # สร้างหน้า goodbye.html แสดงข้อความขอบคุณและแนะนำให้ออกจากระบบ
 
 if __name__ == '__main__':
     app.run(debug=True)
