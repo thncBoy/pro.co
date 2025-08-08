@@ -132,12 +132,13 @@ def question_has_fever():
             if has_fever:
                 update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
                 session['medicine'] = None  # ไม่แนะนำยา
-                return render_template('advise_doctor.html', reason="ปวดกล้ามเนื้อ + มีไข้ อาจเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
+                return render_template('advise_doctor.html', reason="เนื่องจากคุณมีอาการปวดกล้ามเนื้อร่วมกับไข้ ซึ่งอาจเป็นสัญญาณของไข้หวัดใหญ่หรือโรคที่ต้องดูแลโดยแพทย์ ขอแนะนำให้ไปพบแพทย์เพื่อรับการวินิจฉัยและรักษาที่เหมาะสม")
             else:
                 return redirect('/severity')
         elif name in ["ปวดหัว"]:
             if has_fever:
                 return redirect('/question_fever')
+                #if
             else:
                 return redirect('/severity')
         else:
@@ -147,6 +148,7 @@ def question_has_fever():
 @app.route('/question_fever', methods=['GET', 'POST'])
 @require_login
 def question_fever():
+    symptom_type_id = session.get('symptom_type_id')
     if request.method == 'POST':
         muscle_pain = request.form.get('muscle_pain') == 'yes'
         session['muscle_pain'] = muscle_pain
@@ -154,9 +156,13 @@ def question_fever():
         if muscle_pain:
             update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดเมื่อยกล้ามเนื้อ+ไข้)"})
             session['medicine'] = None  # ไม่แนะนำยา
-            return render_template('advise_doctor.html', reason="คุณมีอาการปวดเมื่อยกล้ามเนื้อร่วมกับไข้ อาจเสี่ยงเป็นไข้หวัดใหญ่ โปรดพบแพทย์")
-        else:
-            return redirect('/question_pregnant')
+            return render_template('advise_doctor.html', reason="เนื่องจากคุณมีอาการปวดกล้ามเนื้อร่วมกับไข้ ซึ่งอาจเป็นสัญญาณของไข้หวัดใหญ่หรือโรคที่ต้องดูแลโดยแพทย์ ขอแนะนำให้ไปพบแพทย์เพื่อรับการวินิจฉัยและรักษาที่เหมาะสม")
+        else: 
+            if symptom_type_id == 8 : 
+                return redirect('/question_pregnant')
+            else : 
+                return redirect('/severity')
+            
     return render_template('fever_muscle.html')
 
 @app.route('/severity')
@@ -174,7 +180,7 @@ def submit_severity():
     if severity >= 5:
         update_current_symptom({"severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
         session['medicine'] = None  # ไม่แนะนำยา
-        return render_template('advise_doctor.html', reason="อาการรุนแรง")
+        return render_template('advise_doctor.html', reason="อาการของคุณอยู่ในระดับค่อนข้างรุนแรง โปรดพบแพทย์หรือเภสัชใกล้บ้านท่าน")
     else:
         return redirect('/question_pregnant')
 
@@ -190,9 +196,9 @@ def question_pregnant():
         name = q.data[0]['name'] if q.data else ""
         med = q.data[0]['suggested_medicine'] if q.data else ""
         if pregnant:
-            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)", "is_pregnant": True})
+            update_current_symptom({"severity_note": "อยู่ระหว่างตั้งครรภ์", "is_pregnant": True})
             session['medicine'] = None  # ไม่แนะนำยา
-            return render_template('advise_doctor.html', reason="อยู่ระหว่างตั้งครรภ์")
+            return render_template('advise_doctor.html', reason="คุณอยู่ในระหว่างตั้งครรภ์ โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
         elif name == "กรดไหลย้อน":
             update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
             session['medicine'] = med
@@ -219,7 +225,7 @@ def question_allergy():
                 "paracetamol_allergy": allergy
             })
             session['medicine'] = None  # ไม่แนะนำยา
-            return render_template("advise_doctor.html", reason="แพ้ยาพาราเซตามอล")
+            return render_template("advise_doctor.html", reason="เนื่องจากคุณแพ้ยาพาราเซตามอล โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
         else:
             q = supabase.table('symptom_types').select('suggested_medicine').eq('id', symptom_type_id).execute()
             if q.data:
@@ -280,11 +286,13 @@ def recommend_medicine():
 @app.route('/dispense_loading', methods=['POST'])
 @require_login
 def dispense_loading():
+    update_current_symptom({"accept_medicine" : "รับยา"})
     # ในอนาคตที่นี่จะสั่งจ่ายยาและรอ ESP8266 ส่งสถานะกลับ
     return render_template("loading_dispense.html")  # สร้างหน้า loading_dispense.html ไว้แสดงสถานะกำลังจ่ายยา
 
 @app.route('/goodbye')
 def goodbye():
+    update_current_symptom({"accept_medicine" : "ไม่รับยา"})
     session.clear()
     return render_template("goodbye.html")  # สร้างหน้า goodbye.html แสดงข้อความขอบคุณและแนะนำให้ออกจากระบบ
 

@@ -3,14 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <title>มีไข้หรือไม่</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Bootstrap 5 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <!-- Google Fonts: Prompt -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 100%);
+            font-family: 'Prompt', 'Noto Sans Thai', Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .main-card {
+            background: #fff;
+            border-radius: 2rem;
+            box-shadow: 0 4px 28px rgba(33,150,243,0.11), 0 1.5px 5px rgba(0,0,0,0.04);
+            max-width: 420px;
+            width: 100%;
+            padding: 2.3rem 1.2rem 2rem 1.2rem;
+            margin: auto;
+        }
+        .header-icon {
+            color: #e53935;
+            font-size: 2.6rem;
+            margin-bottom: 1.2rem;
+        }
+        h2 {
+            font-size: 2rem;
+            color: #1565c0;
+            font-weight: 700;
+            margin-bottom: 2.2rem;
+        }
+        .btn-lg {
+            font-size: 1.25rem;
+            padding: 1.05rem 2.3rem;
+            border-radius: 1.4rem;
+            min-width: 120px;
+        }
+        .btn-danger {
+            background-color: #e53935 !important;
+            border: none;
+        }
+        .btn-success {
+            background-color: #43a047 !important;
+            border: none;
+        }
+        .btn-lg:active, .btn-lg:focus {
+            outline: 2px solid #00bcd4;
+        }
+        @media (max-width: 600px) {
+            .main-card { padding: 1.1rem 0.3rem; }
+            h2 { font-size: 1.1rem;}
+            .btn-lg { font-size: 1rem; padding: 0.9rem 1.2rem;}
+        }
+    </style>
 </head>
-<body class="text-center mt-5">
-    <div class="container">
-        <h2 class="mb-4">คุณมีไข้หรือไม่?</h2>
+<body>
+    <a href="/dashboard" class="btn btn-outline-secondary btn-lg mt-3">
+        <span style="font-size:1.4em;">&#8592;</span> ย้อนกลับ
+    </a>  
+    <div class="main-card text-center">
+        <span class="header-icon"><i class="bi bi-thermometer-half"></i></span>
+        <h2>คุณมีไข้หรือไม่?</h2>
         <form method="POST">
-            <button name="has_fever" value="yes" class="btn btn-danger btn-lg m-2">มีไข้</button>
-            <button name="has_fever" value="no" class="btn btn-success btn-lg m-2">ไม่มีไข้</button>
+            <button name="has_fever" value="yes" class="btn btn-danger btn-lg fw-bold m-2">มีไข้</button>
+            <button name="has_fever" value="no" class="btn btn-success btn-lg fw-bold m-2">ไม่มีไข้</button>
         </form>
     </div>
 </body>
