@@ -18,41 +18,35 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      padding: 16px;
     }
     .dispense-card {
       background: #fff;
       border-radius: 2rem;
       box-shadow: 0 4px 28px rgba(33,150,243,0.09), 0 1.5px 5px rgba(0,0,0,0.04);
-      max-width: 400px;
+      max-width: 520px;
       width: 100%;
-      padding: 2.2rem 1.1rem 2rem 1.1rem;
+      padding: 2rem 1.2rem 2rem 1.2rem;
       margin: auto;
       text-align: center;
     }
-    .dispense-icon {
-      color: #0d6efd;
-      font-size: 2.8rem;
-      margin-bottom: .4rem;
-    }
-    h3 {
-      font-size: 1.6rem;
-      color: #1976d2;
-      font-weight: 700;
-      margin-top: 2rem;
-      margin-bottom: 0.2rem;
-    }
-    .spinner-border {
-      width: 4rem;
-      height: 4rem;
-      margin-top: .5rem;
-      margin-bottom: .2rem;
-      color: #0d6efd !important;
-    }
+    .dispense-icon { color: #0d6efd; font-size: 2.8rem; margin-bottom: .4rem; }
+    h3 { font-size: 1.6rem; color: #1976d2; font-weight: 700; margin-top: 1rem; margin-bottom: .2rem; }
+    .spinner-border { width: 3.2rem; height: 3.2rem; margin-top: .5rem; margin-bottom: .8rem; color: #0d6efd !important; }
+
+    .info-title { font-weight: 700; font-size: 1.05rem; margin-bottom: .35rem; }
+    .pill-title { font-size: 1.1rem; font-weight: 700; color: #0d6efd; }
+
+    .card-section { text-align: left; }
+    .list-group-item { font-size: 1rem; padding: 12px 14px; }
+    .badge-pill { border-radius: 1rem; }
+
     @media (max-width: 600px) {
-      .dispense-card { padding: 1rem .3rem; max-width: 97vw;}
-      h3 { font-size: 1.08rem; }
-      .spinner-border { width: 2.3rem; height: 2.3rem; }
-      .dispense-icon { font-size: 1.5rem;}
+      .dispense-card { padding: 1rem .6rem; max-width: 97vw; }
+      h3 { font-size: 1.2rem; }
+      .spinner-border { width: 2.2rem; height: 2.2rem; }
+      .dispense-icon { font-size: 2rem; }
+      .list-group-item { font-size: .98rem; }
     }
   </style>
 </head>
@@ -61,12 +55,44 @@
     <div class="dispense-icon mb-2">
       <i class="bi bi-capsule-pill"></i>
     </div>
+
+    <div class="pill-title mb-2">กำลังจ่ายยา: {{ medicine }}</div>
+
     <div>
       <div class="spinner-border text-primary" role="status"></div>
     </div>
-    <h3 class="mt-4">
-      กำลังจ่ายยา<br>โปรดรอสักครู่...
-    </h3>
+    <h3 class="mt-2">กำลังจ่ายยา<br>โปรดรอสักครู่...</h3>
+
+    <!-- รายละเอียดการใช้ยา/คำแนะนำ/คำเตือน -->
+    <div class="card-section mt-4">
+    <ul class="list-group">
+      <li class="list-group-item">
+        <span class="info-title"><i class="bi bi-lightbulb text-warning"></i> คำแนะนำเพิ่มเติมจากแพทย์</span><br>
+        {{ doctor_advice }}
+      </li>
+    </ul>
+    
+    <script>
+      const timer = setInterval(async ()=>{
+        try{
+          const r = await fetch('/iot/status', {cache:'no-store'});
+          const j = await r.json();
+          // จ่ายสำเร็จจริง (ผ่านเซ็นเซอร์)
+          if (j.dispensed === true){
+            clearInterval(timer);
+            window.location.href = "/goodbye"; // หรือ /dispense_done
+            return;
+          }
+          // ถ้ามอเตอร์หยุดแต่ยังไม่พบของตก: อาจรออีกนิดจน dispensed true
+          // จะใส่ timeout ฝั่ง client เพิ่มก็ได้
+        }catch(e){
+          // เงียบไว้ / หรือแจ้งเตือนแล้วลองใหม่รอบหน้า
+        }
+      }, 500);
+    </script>
+    
+
+    </div>
   </div>
 </body>
 </html>

@@ -61,10 +61,29 @@
             h2 { font-size: 1.1rem;}
             .btn-lg { font-size: 1rem; padding: 0.9rem 1.2rem;}
         }
+        /* ปุ่มย้อนกลับมุมบนซ้าย */
+        .btn-back {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: #fff;
+            border: 2px solid #6c757d;
+            border-radius: 50px;
+            padding: 0.5rem 1.2rem;
+            font-size: 1rem;
+            font-weight: bold;
+            color: #6c757d;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease-in-out;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
-    <a href="/dashboard" class="btn btn-outline-secondary btn-lg mt-3">
+    <a href="/dashboard" class="btn-back">
         <span style="font-size:1.4em;">&#8592;</span> ย้อนกลับ
     </a>  
     <div class="main-card text-center">
