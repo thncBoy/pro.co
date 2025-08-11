@@ -1,98 +1,102 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>กำลังจ่ายยา...</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Bootstrap 5 -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Bootstrap Icons -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
-  <!-- Google Fonts: Prompt -->
-  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
   <style>
     body {
       min-height: 100vh;
       background: linear-gradient(135deg, #e0f7fa 0%, #f8fafc 100%);
-      font-family: 'Prompt', 'Noto Sans Thai', Arial, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, 'Noto Sans Thai', Arial, sans-serif;
     }
-    .dispense-card {
-      background: #fff;
-      border-radius: 2rem;
-      box-shadow: 0 4px 28px rgba(33,150,243,0.09), 0 1.5px 5px rgba(0,0,0,0.04);
-      max-width: 520px;
-      width: 100%;
-      padding: 2rem 1.2rem 2rem 1.2rem;
-      margin: auto;
-      text-align: center;
+    .cardX {
+      background: #fff; border-radius: 1.5rem;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.08);
+      width: min(560px, 92vw); padding: 2rem; text-align: center;
     }
-    .dispense-icon { color: #0d6efd; font-size: 2.8rem; margin-bottom: .4rem; }
-    h3 { font-size: 1.6rem; color: #1976d2; font-weight: 700; margin-top: 1rem; margin-bottom: .2rem; }
-    .spinner-border { width: 3.2rem; height: 3.2rem; margin-top: .5rem; margin-bottom: .8rem; color: #0d6efd !important; }
-
-    .info-title { font-weight: 700; font-size: 1.05rem; margin-bottom: .35rem; }
-    .pill-title { font-size: 1.1rem; font-weight: 700; color: #0d6efd; }
-
-    .card-section { text-align: left; }
-    .list-group-item { font-size: 1rem; padding: 12px 14px; }
-    .badge-pill { border-radius: 1rem; }
-
-    @media (max-width: 600px) {
-      .dispense-card { padding: 1rem .6rem; max-width: 97vw; }
-      h3 { font-size: 1.2rem; }
-      .spinner-border { width: 2.2rem; height: 2.2rem; }
-      .dispense-icon { font-size: 2rem; }
-      .list-group-item { font-size: .98rem; }
+    .spinner-border { width: 3rem; height: 3rem; }
+    .advice-box {
+      text-align: left; background: #f8fbff; border: 1px solid #dbeafe;
+      border-radius: 1rem; padding: 1rem; margin-top: 1rem;
     }
+    .muted { color: #64748b; }
+    .btn-big { padding: 0.8rem 1.2rem; font-size: 1.05rem; font-weight: 700; }
   </style>
 </head>
 <body>
-  <div class="dispense-card">
-    <div class="dispense-icon mb-2">
-      <i class="bi bi-capsule-pill"></i>
-    </div>
-
-    <div class="pill-title mb-2">กำลังจ่ายยา: {{ medicine }}</div>
-
-    <div>
+  <div class="cardX">
+    <div class="mb-2">
       <div class="spinner-border text-primary" role="status"></div>
     </div>
-    <h3 class="mt-2">กำลังจ่ายยา<br>โปรดรอสักครู่...</h3>
+    <h3 class="fw-bold">
+      กำลังจ่ายยา: <span class="text-primary">{{ medicine }}</span>
+    </h3>
+    <p id="status_text" class="muted mt-1">โปรดรอสักครู่ ระบบกำลังทำงาน…</p>
 
-    <!-- รายละเอียดการใช้ยา/คำแนะนำ/คำเตือน -->
-    <div class="card-section mt-4">
-    <ul class="list-group">
-      <li class="list-group-item">
-        <span class="info-title"><i class="bi bi-lightbulb text-warning"></i> คำแนะนำเพิ่มเติมจากแพทย์</span><br>
-        {{ doctor_advice }}
-      </li>
-    </ul>
-    
-    <script>
-      const timer = setInterval(async ()=>{
-        try{
-          const r = await fetch('/iot/status', {cache:'no-store'});
-          const j = await r.json();
-          // จ่ายสำเร็จจริง (ผ่านเซ็นเซอร์)
-          if (j.dispensed === true){
-            clearInterval(timer);
-            window.location.href = "/goodbye"; // หรือ /dispense_done
-            return;
-          }
-          // ถ้ามอเตอร์หยุดแต่ยังไม่พบของตก: อาจรออีกนิดจน dispensed true
-          // จะใส่ timeout ฝั่ง client เพิ่มก็ได้
-        }catch(e){
-          // เงียบไว้ / หรือแจ้งเตือนแล้วลองใหม่รอบหน้า
-        }
-      }, 500);
-    </script>
-    
-
+    {% if doctor_advice %}
+    <div class="advice-box">
+      <div class="fw-semibold mb-1">คำแนะนำเพิ่มเติม</div>
+      <div class="text-body">{{ doctor_advice }}</div>
     </div>
+    {% endif %}
+
+    <button id="btn-go-goodbye" class="btn btn-primary btn-big mt-3 d-none" onclick="goGoodbye()">
+      ไปหน้าสิ้นสุดการใช้งาน
+    </button>
   </div>
+  <script>
+  // โพลล์ไวขึ้น + ต้องพบ dispensed=true ติดกัน 2 ครั้ง
+  const POLL_MS = 250;
+  const NEED_OK = 2;
+  const MIN_SPIN_MS = 1200;            // แสดงโหลดดิ้งอย่างน้อยเท่านี้
+  const MAX_WAIT_MS = 60000;           // 60s ครบเวลาแล้วค่อย fallback
+  let okStreak = 0;
+  const t0 = Date.now();
+
+  async function poll() {
+    try {
+      const r = await fetch('/iot/status', { cache: 'no-store' });
+      const j = await r.json();
+
+      if (j.ok) {
+        const st = j.status || {};
+        // ✅ เงื่อนไขใหม่: "ต้อง dispensed === true" เท่านั้น ถึงจะไปต่อ
+        //    (ตัดเงื่อนไข busy=false ออก เพื่อไม่ให้เด้งเร็วเกินไป)
+        if (st.dispensed === true) {
+          okStreak++;
+        } else {
+          okStreak = 0;
+        }
+
+        // ถึงเกณฑ์ + แสดงโหลดดิ้งนานพอ -> ไปหน้า goodbye
+        if (okStreak >= NEED_OK && (Date.now() - t0) >= MIN_SPIN_MS) {
+          window.location.href = '/goodbye';
+          return;
+        }
+      } else {
+        okStreak = 0;
+      }
+    } catch (e) {
+      okStreak = 0;
+    }
+
+    // ⛑️ Fallback: ถ้ารอนานเกิน MAX_WAIT_MS (เช่น เซ็นเซอร์หลุด)
+    if (Date.now() - t0 > MAX_WAIT_MS) {
+      // จะเลือกกลับหน้าก่อนหน้า/แสดงแจ้งเตือนก็ได้
+      window.location.href = '/goodbye';  // หรือ redirect ไปหน้าขอโทษ/แจ้งเจ้าหน้าที่
+      return;
+    }
+
+    setTimeout(poll, POLL_MS);
+  }
+  poll();
+  </script>
+    
 </body>
 </html>
