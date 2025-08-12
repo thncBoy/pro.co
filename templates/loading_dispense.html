@@ -51,52 +51,57 @@
     </button>
   </div>
   <script>
-  // โพลล์ไวขึ้น + ต้องพบ dispensed=true ติดกัน 2 ครั้ง
-  const POLL_MS = 250;
-  const NEED_OK = 2;
-  const MIN_SPIN_MS = 1200;            // แสดงโหลดดิ้งอย่างน้อยเท่านี้
-  const MAX_WAIT_MS = 60000;           // 60s ครบเวลาแล้วค่อย fallback
-  let okStreak = 0;
-  const t0 = Date.now();
-
-  async function poll() {
-    try {
-      const r = await fetch('/iot/status', { cache: 'no-store' });
-      const j = await r.json();
-
-      if (j.ok) {
-        const st = j.status || {};
-        // ✅ เงื่อนไขใหม่: "ต้อง dispensed === true" เท่านั้น ถึงจะไปต่อ
-        //    (ตัดเงื่อนไข busy=false ออก เพื่อไม่ให้เด้งเร็วเกินไป)
-        if (st.dispensed === true) {
-          okStreak++;
+    const MAX_WAIT   = {{ max_wait_ms|default(60000) }};
+    const INTERVAL   = {{ poll_every_ms|default(400) }};
+  
+    let waited = 0;
+    let consecutiveErr = 0;
+    const MAX_ERR = 8; // error ติดกันเกินนี้ถือว่ามีปัญหา
+  
+    async function pollStatus() {
+      try {
+        const res = await fetch('/iot/status');
+        const data = await res.json();
+  
+        if (data.ok) {
+          consecutiveErr = 0; // reset error สะสม
+          const st = data.status; // {busy, dispensed, distance_cm, ...}
+  
+          // โชว์ระยะถ้ามี element
+          const elDist = document.getElementById('distanceText');
+          if (elDist && typeof st.distance_cm !== 'undefined') {
+            elDist.textContent = `${Number(st.distance_cm).toFixed(1)} cm`;
+          }
+  
+          // ✅ มียาตกจริง
+          if (st.dispensed === true) {
+            try {
+              await fetch('/dispense_success', {method:'POST'});
+            } catch(e) {}
+            window.location.href = '/goodbye';
+            return;
+          }
         } else {
-          okStreak = 0;
+          consecutiveErr++;
         }
-
-        // ถึงเกณฑ์ + แสดงโหลดดิ้งนานพอ -> ไปหน้า goodbye
-        if (okStreak >= NEED_OK && (Date.now() - t0) >= MIN_SPIN_MS) {
-          window.location.href = '/goodbye';
-          return;
-        }
-      } else {
-        okStreak = 0;
+      } catch (err) {
+        consecutiveErr++;
+        console.error(err);
       }
-    } catch (e) {
-      okStreak = 0;
+  
+      waited += INTERVAL;
+  
+      // ถ้า error ติดกันเยอะ หรือรอนานเกิน -> ไปหน้าลองใหม่
+      if (consecutiveErr >= MAX_ERR || waited >= MAX_WAIT) {
+        window.location.href = '/dispense_failed';
+        return;
+      }
+  
+      setTimeout(pollStatus, INTERVAL);
     }
-
-    // ⛑️ Fallback: ถ้ารอนานเกิน MAX_WAIT_MS (เช่น เซ็นเซอร์หลุด)
-    if (Date.now() - t0 > MAX_WAIT_MS) {
-      // จะเลือกกลับหน้าก่อนหน้า/แสดงแจ้งเตือนก็ได้
-      window.location.href = '/goodbye';  // หรือ redirect ไปหน้าขอโทษ/แจ้งเจ้าหน้าที่
-      return;
-    }
-
-    setTimeout(poll, POLL_MS);
-  }
-  poll();
+  
+    pollStatus();
   </script>
-    
+  
 </body>
 </html>

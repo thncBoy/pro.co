@@ -293,7 +293,7 @@ def question_pregnant():
         med = q.data[0]['suggested_medicine'] if q.data else ""
 
         if pregnant:
-            update_current_symptom({"severity_note": "อยู่ระหว่างตั้งครรภ์", "is_pregnant": True})
+            update_current_symptom({"severity_note": "แนะนำให้พบแพทญ์เนื่องจากอยู่ระหว่างตั้งครรภ์", "is_pregnant": True})
             session['medicine'] = None
             return render_template('advise_doctor.html', reason="คุณอยู่ในระหว่างตั้งครรภ์ โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
 
@@ -363,40 +363,47 @@ def recommend_medicine():
         usage=info.get("usage"),
         warning=info.get("warning")
     )
+# บนสุดยังเหมือนเดิม
+MAX_RETRY = 2
+DEFAULT_MAX_WAIT_MS = 60000  # 60s
 
-@app.route('/dispense_loading', methods=['POST'])
+@app.route('/dispense_loading', methods=['GET', 'POST'])
 @require_login
 def dispense_loading():
-    update_current_symptom({"accept_medicine": "รับยา"})
+    # 1) บันทึกการกดรับยา (เฉพาะครั้งแรก)
+    if request.method == 'POST':
+        update_current_symptom({"accept_medicine": "รับยา"})
+        session['dispense_attempts'] = session.get('dispense_attempts', 0)
+
+    # 2) map ชื่อยา -> ช่อง
     medicine = session.get('medicine')
-    if not medicine:
-        flash("ไม่พบรายการยา", "error")
+    if not medicine or medicine not in SLOT_BY_MEDICINE:
+        flash("ไม่พบข้อมูลช่องสำหรับยาที่เลือก", "error")
         return redirect('/dashboard')
 
-    slot = SLOT_BY_MEDICINE.get(medicine)
-    if not slot:
-        flash("ไม่พบช่องจ่ายที่ตรงกับยา", "error")
-        return redirect('/dashboard')
+    slot = SLOT_BY_MEDICINE[medicine]
 
-    # ส่งคำสั่งไป ESP32
+    # 3) ข้อความคำแนะนำแพทย์
+    info = get_medicine_info(medicine) if medicine else {"doctor_advice": "-"}
+    doctor_advice = info.get("doctor_advice", "-")
+
+    # 4) สั่งให้ ESP32 จ่ายยา (ทุกครั้งที่เข้าหน้านี้ เพื่อรองรับ 'ลองใหม่')
     try:
         resp = iot_dispense(slot)
-        if not resp.get("ok"):
+        if not resp.get("ok", False):
             flash(f"สั่งจ่ายยาไม่สำเร็จ: {resp}", "error")
-            return redirect('/dashboard')
+            return redirect('/dispense_failed')
     except Exception as e:
         flash(f"เชื่อมต่อเครื่องจ่ายยาไม่ได้: {e}", "error")
-        return redirect('/dashboard')
+        return redirect('/dispense_failed')
 
-    # บอกหน้าโหลดดิ้งว่า 'ต้องรอเซ็นเซอร์ยืนยัน'
-    sensor_required = os.environ.get("USE_ULTRASONIC", "1") == "1"
-
-    info = get_medicine_info(medicine)
+    # 5) ส่งค่า polling ไปหน้า loading
     return render_template(
         "loading_dispense.html",
         medicine=medicine,
-        doctor_advice=info.get("doctor_advice", "-"),
-        sensor_required=sensor_required
+        doctor_advice=doctor_advice,
+        max_wait_ms=DEFAULT_MAX_WAIT_MS,   # สูงสุด 60s
+        poll_every_ms=400                  # โพลล์ทุก 400ms
     )
 
 # ปุ่ม “ไม่รับยา”
@@ -414,6 +421,47 @@ def decline_medicine():
 def goodbye():
     session.clear()
     return render_template("goodbye.html")
+
+@app.route('/dispense_success', methods=['POST'])
+@require_login
+def dispense_success():
+    # บันทึกว่า "จ่ายสำเร็จ"
+    update_current_symptom({"dispense_status": "success"})
+    # เคลียร์ตัวนับ retry เผื่อมีค้าง
+    session.pop('dispense_attempts', None)
+    # ไปหน้า goodbye
+    return redirect('/goodbye')
+
+
+@app.route('/dispense_failed')
+@require_login
+def dispense_failed():
+    # log ลง DB ว่าหมดเวลารอ
+    update_current_symptom({"dispense_status": "timeout"})
+    attempts = session.get('dispense_attempts', 0)
+    return render_template('dispense_failed.html',
+                           attempts=attempts,
+                           max_retry=MAX_RETRY)
+
+@app.route('/dispense_retry', methods=['POST'])
+@require_login
+def dispense_retry():
+    attempts = session.get('dispense_attempts', 0)
+    if attempts >= MAX_RETRY:
+        flash("พยายามจ่ายยาครบจำนวนครั้งแล้ว กรุณาติดต่อเจ้าหน้าที่", "warning")
+        return redirect('/dispense_failed')
+
+    # เพิ่มตัวนับ แล้วสั่งหมุนใหม่ (รี-ใช้ dispense_loading)
+    session['dispense_attempts'] = attempts + 1
+    update_current_symptom({"dispense_status": f"retry{session['dispense_attempts']}"})
+    return redirect('/dispense_loading')  # จะไปสั่งหมุน + กลับหน้าโหลดดิ้งอัตโนมัติ
+
+@app.route('/dispense_cancel', methods=['POST'])
+@require_login
+def dispense_cancel():
+    update_current_symptom({"dispense_status": "cancel"})
+    # ไม่ตัด session ให้กลับไปขอบคุณ/ออก หรือกลับห้องอาการตามที่คุณต้องการ
+    return redirect('/goodbye')  # หรือจะพากลับ dashboard ก็ได้
 
 # ==============================
 # Entrypoint
