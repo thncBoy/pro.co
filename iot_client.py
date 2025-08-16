@@ -14,7 +14,7 @@ def iot_status() -> dict:
     """เรียก /status จาก ESP32"""
     url = f"{get_dispenser_url()}/status"
     r = requests.get(url, timeout=STATUS_TIMEOUT)
-    r.raise_for_status()
+    r.raise_for_status()   
     return r.json()
 
 def iot_dispense(slot: int) -> dict:

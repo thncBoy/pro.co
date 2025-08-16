@@ -121,11 +121,66 @@ def login():
                 return redirect('/dashboard')
         flash("Incorrect username or password", "error")
     return render_template('login.html')
+# ------------ Back Navigation (stack) ------------
+from flask import g, request, url_for
 
+# ระบุเฉพาะหน้า GET ที่อยากให้เข้าระบบ back-stack
+NAV_PAGES = {
+    'dashboard',
+    'question_has_fever',
+    'question_fever',
+    'severity',
+    'question_pregnant',
+    'question_allergy',
+    'recommend_medicine',
+    # 'loading_dispense',  # ปกติ "ไม่" ใส่หน้าโหลด เพื่อกันย้อนกลับค้างหน้านี้
+    # 'goodbye',          # หน้าจบ ไม่ต้องย้อน
+    'login',
+    'register',
+}
+
+@app.before_request
+def _push_nav_stack():
+    # ดันเฉพาะ GET + endpoint ที่อยู่ใน NAV_PAGES เท่านั้น
+    if request.method == 'GET' and request.endpoint in NAV_PAGES:
+        stack = session.get('nav_stack', [])
+        # กัน push ซ้ำหน้าซ้ำ path
+        if not stack or stack[-1] != request.path:
+            stack.append(request.path)
+            # จำกัดความยาว stack กันบวม
+            if len(stack) > 20:
+                stack = stack[-20:]
+            session['nav_stack'] = stack
+
+        # คำนวณ back_url ไปให้ template ใช้
+        g.back_url = stack[-2] if len(stack) > 1 else url_for('dashboard')
+    else:
+        # หน้าที่ไม่อยู่ในระบบ stack ให้ fallback เป็น dashboard
+        g.back_url = url_for('dashboard')
+
+@app.route('/back')
+def back():
+    stack = session.get('nav_stack', [])
+    # ถอย 1 ขั้น: เอาหน้าปัจจุบันออก แล้วไปตัวก่อนหน้า
+    if len(stack) >= 2:
+        stack.pop()                      # current
+        target = stack.pop()             # previous (เอาออกแล้วค่อย push กลับ)
+        session['nav_stack'] = stack + [target]
+        return redirect(target)
+    # ถ้าไม่มีอะไรใน stack
+    return redirect(url_for('dashboard'))
+
+@app.context_processor
+def inject_back_url():
+    # ให้ทุก template เรียก {{ back_url }} ได้
+    return {'back_url': getattr(g, 'back_url', url_for('dashboard'))}
+
+# เคลียร์ stack เมื่อเริ่ม flow ใหม่หรือออกจากระบบ
 @app.route('/logout')
 def logout():
     if 'user_id' in session:
         log_user_action(session['user_id'], "logout")
+    session.pop('nav_stack', None)
     session.clear()
     flash("Logout successful!", "success")
     return redirect('/login')
@@ -133,6 +188,8 @@ def logout():
 @app.route('/dashboard')
 @require_login
 def dashboard():
+    # เปิดหน้าแรกของ flow ให้ stack เริ่มใหม่
+    session['nav_stack'] = ['/dashboard']
     result = supabase.table('symptom_types').select('*').execute()
     symptoms = result.data if result.data else []
     return render_template('first.html', symptoms=symptoms)
@@ -365,7 +422,7 @@ def recommend_medicine():
     )
 # บนสุดยังเหมือนเดิม
 MAX_RETRY = 2
-DEFAULT_MAX_WAIT_MS = 60000  # 60s
+DEFAULT_MAX_WAIT_MS = 15000
 
 @app.route('/dispense_loading', methods=['GET', 'POST'])
 @require_login
