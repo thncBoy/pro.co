@@ -2,106 +2,127 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8" />
-  <title>กำลังจ่ายยา...</title>
+  <title>กำลังจ่ายยา…</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-    rel="stylesheet"
-  />
+  <!-- no-cache กันเบราเซอร์แคช -->
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
   <style>
-    body {
-      min-height: 100vh;
-      background: linear-gradient(135deg, #e0f7fa 0%, #f8fafc 100%);
-      display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, 'Noto Sans Thai', Arial, sans-serif;
+    body{
+      min-height:100vh; display:flex; align-items:center; justify-content:center;
+      background: linear-gradient(135deg,#e8f7ff 0%,#f7fbff 100%);
+      font-family: "Prompt","Noto Sans Thai",system-ui,Arial,sans-serif;
     }
-    .cardX {
-      background: #fff; border-radius: 1.5rem;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.08);
-      width: min(560px, 92vw); padding: 2rem; text-align: center;
+    .card-wrap{
+      max-width: 720px; width: 100%; border-radius: 24px; padding: 28px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.08);
+      background:#fff;
     }
-    .spinner-border { width: 3rem; height: 3rem; }
-    .advice-box {
-      text-align: left; background: #f8fbff; border: 1px solid #dbeafe;
-      border-radius: 1rem; padding: 1rem; margin-top: 1rem;
-    }
-    .muted { color: #64748b; }
-    .btn-big { padding: 0.8rem 1.2rem; font-size: 1.05rem; font-weight: 700; }
+    .pill { font-size: 56px; color:#0d6efd; }
+    .spinner-border { width:3.5rem; height:3.5rem; }
+    .sec-title{ font-weight:700; color:#0d6efd; }
+    .advice-box{ background:#f8fbff; border:1px dashed #b6d6ff; border-radius:16px; padding:16px; }
   </style>
 </head>
 <body>
-  <div class="cardX">
-    <div class="mb-2">
+  <div class="card-wrap">
+    <div class="text-center">
+      <div class="pill mb-2"><i class="bi bi-capsule-pill"></i></div>
       <div class="spinner-border text-primary" role="status"></div>
+      <h3 class="mt-3 mb-1">กำลังจ่ายยา โปรดรอสักครู่…</h3>
+      <div class="text-muted">รายการยา: <span class="fw-semibold">{{ medicine }}</span></div>
     </div>
-    <h3 class="fw-bold">
-      กำลังจ่ายยา: <span class="text-primary">{{ medicine }}</span>
-    </h3>
-    <p id="status_text" class="muted mt-1">โปรดรอสักครู่ ระบบกำลังทำงาน…</p>
 
-    {% if doctor_advice %}
-    <div class="advice-box">
-      <div class="fw-semibold mb-1">คำแนะนำเพิ่มเติม</div>
-      <div class="text-body">{{ doctor_advice }}</div>
+    <hr class="my-4">
+
+    <div>
+      <div class="sec-title mb-2"><i class="bi bi-info-circle"></i> คำแนะนำจากแพทย์ระหว่างรอ</div>
+      <div class="advice-box">
+        {{ doctor_advice }}
+      </div>
     </div>
-    {% endif %}
 
-    <button id="btn-go-goodbye" class="btn btn-primary btn-big mt-3 d-none" onclick="goGoodbye()">
-      ไปหน้าสิ้นสุดการใช้งาน
-    </button>
+    <div class="mt-3 text-center text-muted" id="timer">กำลังตรวจสอบสถานะการจ่ายยา…</div>
   </div>
+
+<!-- loading_dispense.html (เฉพาะ <script> ส่วนล่าง) -->
   <script>
-    const MAX_WAIT   = {{ max_wait_ms|default(60000) }};
-    const INTERVAL   = {{ poll_every_ms|default(400) }};
+    // ค่าพื้นฐาน (รับจาก template)
+    const HARD_TIMEOUT_MS = {{ max_wait_ms|default(60000) }};   // เช่น 60000 = 60 วิ
+    const POLL_EVERY_MS   = {{ poll_every_ms|default(400) }};   // เช่น 400 ms
   
-    let waited = 0;
-    let consecutiveErr = 0;
-    const MAX_ERR = 8; // error ติดกันเกินนี้ถือว่ามีปัญหา
+    // ตั้ง deadline รวม (กันกรณีอุปกรณ์ไม่ตอบ)
+    const hardDeadline = Date.now() + HARD_TIMEOUT_MS;
   
-    async function pollStatus() {
+    const statusEl   = document.getElementById('status-text');     // ถ้ามี element แสดงสถานะ
+    const noteEl     = document.getElementById('note-text');       // ถ้ามี element หมายเหตุ
+    const adviceBox  = document.getElementById('advice-box');      // กล่องคำแนะนำแพทย์ (จะคงแสดงตลอด)
+    // หมายเหตุ: ถ้าไม่มี id เหล่านี้ใน DOM ไม่เป็นไร โค้ดจะวิ่งได้อยู่
+  
+    async function pollOnce() {
       try {
-        const res = await fetch('/iot/status');
-        const data = await res.json();
+        const r = await fetch('/iot/status', { cache: 'no-store' });
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || 'bad status');
   
-        if (data.ok) {
-          consecutiveErr = 0; // reset error สะสม
-          const st = data.status; // {busy, dispensed, distance_cm, ...}
+        const st = data.status || {};
+        const busy = !!st.busy;            // true = “หมุนอยู่ หรือ post-check ยังไม่จบ”
+        const dispensed = !!st.dispensed;  // true = เซ็นเซอร์ยืนยันพบน้ำหนัก/วัตถุแล้ว
   
-          // โชว์ระยะถ้ามี element
-          const elDist = document.getElementById('distanceText');
-          if (elDist && typeof st.distance_cm !== 'undefined') {
-            elDist.textContent = `${Number(st.distance_cm).toFixed(1)} cm`;
+        // อัปเดต UI นิดหน่อย (optional)
+        if (statusEl) {
+          if (busy) {
+            statusEl.textContent = 'กำลังจ่ายยา/ตรวจสอบ...';
+          } else {
+            statusEl.textContent = 'สรุปผลจากเซ็นเซอร์...';
           }
+        }
+        if (noteEl && typeof st.distance_cm === 'number') {
+          noteEl.textContent = `ระยะเซ็นเซอร์ ~ ${st.distance_cm.toFixed(1)} cm`;
+        }
   
-          // ✅ มียาตกจริง
-          if (st.dispensed === true) {
-            try {
-              await fetch('/dispense_success', {method:'POST'});
-            } catch(e) {}
-            window.location.href = '/goodbye';
+        // ตัดสินผล “เฉพาะเมื่อ busy=false”
+        if (!busy) {
+          if (dispensed) {
+            // เซ็นเซอร์ยืนยันแล้ว → success
+            // ใช้ replace กันปุ่ม Back พาผู้ใช้กลับมาหน้านี้
+            window.location.replace('/dispense_success');
+            return;
+          } else {
+            // ไม่พบของตกในถาด → ให้ไปหน้าลองใหม่
+            window.location.replace('/dispense_failed');
             return;
           }
-        } else {
-          consecutiveErr++;
         }
-      } catch (err) {
-        consecutiveErr++;
-        console.error(err);
+  
+        // ยัง busy → ตรวจ hard timeout
+        if (Date.now() > hardDeadline) {
+          window.location.replace('/dispense_failed'); // ครบเวลาแล้ว
+          return;
+        }
+  
+      } catch (e) {
+        // ปัญหา network ก็ถือเป็น “ยังไม่จบ” ให้รอจน hard timeout
+        if (Date.now() > hardDeadline) {
+          window.location.replace('/dispense_failed');
+          return;
+        }
       }
   
-      waited += INTERVAL;
-  
-      // ถ้า error ติดกันเยอะ หรือรอนานเกิน -> ไปหน้าลองใหม่
-      if (consecutiveErr >= MAX_ERR || waited >= MAX_WAIT) {
-        window.location.href = '/dispense_failed';
-        return;
-      }
-  
-      setTimeout(pollStatus, INTERVAL);
+      // โพลล์ต่อ
+      setTimeout(pollOnce, POLL_EVERY_MS);
     }
   
-    pollStatus();
+    // เริ่มโพลล์
+    setTimeout(pollOnce, POLL_EVERY_MS);
   </script>
   
+    
+
 </body>
 </html>

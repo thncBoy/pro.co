@@ -420,9 +420,29 @@ def recommend_medicine():
         usage=info.get("usage"),
         warning=info.get("warning")
     )
+
+@app.route('/dispense_success', methods=['GET'])
+@require_login
+def dispense_success():
+    """
+    หน้า UI แจ้ง 'จ่ายยาสำเร็จ' แล้วเด้งไปหน้า goodbye อัตโนมัติภายใน X วินาที
+    เรียกจาก loading_dispense.html ด้วย window.location.replace()
+    """
+    medicine = session.get('medicine', 'ยา')
+    # บันทึกสถานะ (ถ้ามีคอลัมน์ใน symptoms)
+    try:
+        update_current_symptom({"dispense_status": "success"})
+    except Exception:
+        pass
+
+    redirect_ms = 4000  # 4 วิ แล้วพาไปหน้า goodbye
+    return render_template('dispense_success.html',
+                           medicine=medicine,
+                           redirect_ms=redirect_ms)
+
 # บนสุดยังเหมือนเดิม
 MAX_RETRY = 2
-DEFAULT_MAX_WAIT_MS = 15000
+DEFAULT_MAX_WAIT_MS = 60000
 
 @app.route('/dispense_loading', methods=['GET', 'POST'])
 @require_login
@@ -479,16 +499,23 @@ def goodbye():
     session.clear()
     return render_template("goodbye.html")
 
-@app.route('/dispense_success', methods=['POST'])
-@require_login
-def dispense_success():
-    # บันทึกว่า "จ่ายสำเร็จ"
-    update_current_symptom({"dispense_status": "success"})
-    # เคลียร์ตัวนับ retry เผื่อมีค้าง
-    session.pop('dispense_attempts', None)
-    # ไปหน้า goodbye
-    return redirect('/goodbye')
-
+@app.route('/dispense_success_cb', methods=['POST'])
+def dispense_success_cb():
+    """
+    (ทางเลือก) Endpoint สำหรับอุปกรณ์/ระบบอื่นยิง callback มาบอกว่า 'สำเร็จ'
+    ยังไม่บังคับใช้ใน flow ปัจจุบัน แต่เก็บไว้เผื่ออนาคต
+    """
+    data = request.get_json(silent=True) or {}
+    # ตัวอย่าง: {"symptom_id": 123, "status": "success"}
+    try:
+        # ถ้ามี symptom_id ส่งมา ก็อัปเดตแถวเป้าหมายแทนการใช้ session
+        if "symptom_id" in data:
+            supabase.table('symptoms').update({"dispense_status": "success"}).eq('id', int(data["symptom_id"])).execute()
+        else:
+            update_current_symptom({"dispense_status": "success"})
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
 
 @app.route('/dispense_failed')
 @require_login
