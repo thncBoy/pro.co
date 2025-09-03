@@ -118,7 +118,7 @@
       <form method="POST" action="/select_symptom">
         <div class="d-flex flex-wrap justify-content-center">
           {% for s in symptoms %}
-            <button type="submit" name="symptom_id" value="{{ s.id }}" class="btn btn-kiosk m-2">
+            <button type="submit" name="symptom_type_id" value="{{ s.symptom_type_id }}" class="btn btn-kiosk m-2">
               <i class="bi bi-emoji-smile"></i> {{ s.name }}
             </button>
           {% endfor %}
