@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <title>Smart Med Dashboard</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Tailwind (optional utilities) -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css" rel="stylesheet">
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-light">
+
+  <div class="container py-3">
+
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg bg-white border rounded shadow-sm mb-3 px-3">
+      <a class="navbar-brand fw-semibold" href="#">Smart Med</a>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        {% if is_admin %}<span class="badge bg-dark">ADMIN</span>{% endif %}
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+      </div>
+    </nav>
+
+    <h1 class="mb-3">💊 Smart Med Dispenser — Dashboard</h1>
+
+    <div class="row g-4">
+
+      <!-- Users summary -->
+      <div class="col-md-4">
+        <div class="card shadow">
+          <div class="card-header fw-bold">Users</div>
+          <div class="card-body">
+            <div id="userBox" class="h5">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Users -->
+      <div class="col-md-8">
+        <div class="card shadow">
+          <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+            <span>Recent Users</span>
+            <a href="/users/history" class="btn btn-sm btn-outline-primary">View All</a>
+          </div>
+          <div class="card-body">
+            <ul id="recentList" class="list-group small"></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daily Dispense chart -->
+      <div class="col-md-8">
+        <div class="card shadow">
+          <div class="card-header fw-bold">Dispensed per Day</div>
+          <div class="card-body">
+            <canvas id="dailyChart" height="300"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top medicines -->
+      <div class="col-md-4">
+        <div class="card shadow">
+          <div class="card-header fw-bold">Top Medicines (30d)</div>
+          <div class="card-body">
+            <ol id="topList" class="list-group list-group-numbered"></ol>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stock table -->
+      <div class="col-md-12">
+        <div class="card shadow">
+          <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+            <span>Low Stock</span>
+            <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#refillModal">+ Refill</button>
+          </div>
+          <div class="card-body">
+            <table id="stockTbl" class="table table-striped table-bordered text-center align-middle small mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Slot</th>
+                  <th>Medicine</th>
+                  <th>Stock</th>
+                  <th>Threshold</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody><!-- filled by JS --></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Refill Modal -->
+  <div class="modal fade" id="refillModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <form id="refillForm" class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">เติมสต็อกยา</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">เลือกยา</label>
+            <select id="refillMedicine" class="form-select" required></select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">จำนวนที่เติม</label>
+            <input id="refillQty" type="number" min="1" class="form-control" placeholder="เช่น 10" required>
+            <div class="form-text">ระบบจะเพิ่มสต็อกของยาที่เลือกเท่านั้น</div>
+          </div>
+          <div id="refillMsg" class="small text-muted"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">ปิด</button>
+          <button id="refillSubmit" type="submit" class="btn btn-primary">บันทึก</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+let dailyChart = null;
+
+async function load() {
+  const r = await fetch('/dash/data');
+  const d = await r.json();
+
+  // ---- Users summary
+  const u = d.users || {};
+  document.getElementById('userBox').innerText =
+    `Total: ${u.total_users ?? 0} | Active 7d: ${u.dau_7d ?? 0} | Active 30d: ${u.mau_30d ?? 0}`;
+
+  // ---- Recent users
+  const recent = d.recent_users || [];
+  document.getElementById('recentList').innerHTML =
+    recent.length ? recent.map(x => `
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        <div>
+          <div class="fw-semibold">${x.username}</div>
+          <div class="small text-muted">
+            <span class="me-2">แนะนำยา: ${x.recommended_medicine || '-'}</span>
+            <span class="badge ${x.accept_medicine==='รับยา' ? 'bg-success' : (x.accept_medicine ? 'bg-secondary' : 'bg-light text-dark')}">
+              ${x.accept_medicine || '-'}
+            </span>
+            <span class="badge ${x.dispense_status==='success' ? 'bg-primary' : (x.dispense_status ? 'bg-warning text-dark' : 'bg-light text-dark')} ms-1">
+              ${x.dispense_status || '-'}
+            </span>
+          </div>
+        </div>
+      </li>
+    `).join('') : `<li class="list-group-item text-muted">No recent users</li>`;
+
+  // ---- Daily chart
+  const labels = (d.dispense_daily||[]).map(x=>x.day);
+  const data   = (d.dispense_daily||[]).map(x=>x.dispense_count);
+  if (dailyChart) dailyChart.destroy();
+  dailyChart = new Chart(document.getElementById('dailyChart'), {
+    type:'line',
+    data:{
+      labels: labels.length ? labels : ['no data'],
+      datasets:[{
+        label:'Dispenses',
+        data: data.length ? data : [0],
+        borderColor:'rgba(54, 162, 235, 1)',
+        backgroundColor:'rgba(54, 162, 235, 0.2)',
+        pointBackgroundColor:'rgba(255, 99, 132, 1)',
+        fill:true,
+        tension:0.3
+      }]
+    },
+    options:{ responsive:true, maintainAspectRatio:false }
+  });
+
+  // ---- Top medicines
+  const top = d.top_meds || [];
+  document.getElementById('topList').innerHTML =
+    top.length ? top.map(x=>`
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        ${x.med}
+        <span class="badge bg-primary rounded-pill">${x.cnt}</span>
+      </li>
+    `).join('') : `<li class="list-group-item text-muted">No data</li>`;
+
+  // ---- Stock table + เติม dropdown modal
+  const slots = d.slots || [];
+  const tbody = slots.length
+    ? slots.map(x => `
+        <tr class="${x.current_stock<=x.low_stock_thr ? 'table-danger' : ''}">
+          <td>#${x.slot}</td>
+          <td>${x.medicine_name || '-'}</td>
+          <td>${x.current_stock}</td>
+          <td>${x.low_stock_thr}</td>
+          <td>${x.current_stock<=x.low_stock_thr ? '⚠️ Low' : 'OK'}</td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="5" class="text-muted text-center">No stock rows</td></tr>`;
+  document.querySelector('#stockTbl tbody').innerHTML = tbody;
+
+  const sel = document.getElementById('refillMedicine');
+  if (sel) {
+    sel.innerHTML = slots.map(s =>
+      `<option value="${s.slot}">${s.medicine_name} (slot #${s.slot})</option>`
+    ).join('');
+  }
+}
+
+// ---- submit refill
+document.getElementById('refillForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('refillSubmit');
+  const msg = document.getElementById('refillMsg');
+  btn.disabled = true; msg.className='small text-muted'; msg.textContent='กำลังบันทึก...';
+
+  const slot = parseInt(document.getElementById('refillMedicine').value, 10);
+  const qty  = parseInt(document.getElementById('refillQty').value, 10);
+
+  try {
+    const res = await fetch('/admin/refill', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ slot, qty })
+    });
+
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text.slice(0,120)}`);
+    }
+    const j = await res.json();
+    if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+
+    msg.className='small text-success';
+    msg.textContent = `สำเร็จ! สต็อกใหม่ = ${j.new_stock ?? 'N/A'}`;
+
+    setTimeout(() => {
+      bootstrap.Modal.getInstance(document.getElementById('refillModal'))?.hide();
+      document.getElementById('refillForm').reset();
+      load(); // refresh ตาราง/ไอคอนเตือน
+    }, 600);
+
+  } catch (err) {
+    msg.className='small text-danger';
+    msg.textContent = 'ผิดพลาด: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+load();
+/* ถ้าต้องการ refresh อัตโนมัติ:
+setInterval(load, 30000);
+*/
+</script>
+</body>
+</html>

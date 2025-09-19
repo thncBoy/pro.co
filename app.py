@@ -1,9 +1,8 @@
 # app.py
-from flask import Flask, render_template, request, redirect, session, flash, g, url_for
+from flask import Flask, render_template, request, redirect, session, flash, g, url_for,jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
-
 from connDB import supabase
 from iot_client import iot_dispense
 from iot_routes import iot_bp
@@ -16,6 +15,22 @@ if 'iot' not in app.blueprints:
     app.register_blueprint(iot_bp)
 
 # ----------------------- Utilities -----------------------
+def require_role(*roles):
+    def deco(f):
+        @wraps(f)
+        def _wrap(*args, **kwargs):
+            if 'user_id' not in session:
+                flash("Please login to continue", "error")
+                return redirect('/login')
+            if session.get('role', 'user') not in roles:
+                return ("Forbidden", 403)
+            return f(*args, **kwargs)
+        return _wrap
+    return deco
+
+require_admin = require_role('admin')
+
+
 def require_login(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -34,6 +49,90 @@ def update_current_symptom(update_dict: dict):
     symptom_id = session.get('symptom_id')
     if symptom_id:
         supabase.table('symptoms').update(update_dict).eq('symptom_id', symptom_id).execute()
+
+
+# ===== Dashboard JSON =====
+@app.get("/dash/data")
+@require_login
+def dash_data():
+    # 1) ผู้ใช้
+    au = supabase.table("v_active_users").select("*").execute().data
+    au = au[0] if au else {"total_users": 0, "dau_7d": 0, "mau_30d": 0}
+
+    # 2) สต๊อก
+    slots = supabase.table("v_low_stock").select("*").execute().data
+
+    # 3) จ่ายรายวัน
+    daily = supabase.table("v_dispense_daily").select("*").execute().data
+
+    # 4) Top ยา
+    top = supabase.table("v_top_medicines_30d").select("*").limit(10).execute().data
+
+    # 5) สถานะตู้จาก ESP32
+    try:
+        from iot_client import iot_status  # ใช้ฟังก์ชันที่คุณมีอยู่แล้ว:contentReference[oaicite:9]{index=9}
+        device = iot_status()              # proxy ได้จาก blueprint /iot ด้วยก็ได้:contentReference[oaicite:10]{index=10}
+    except Exception as e:
+        device = {"ok": False, "error": str(e)}
+
+    recent = supabase.table("v_recent_users_min")\
+            .select("username,recommended_medicine,accept_medicine,dispense_status")\
+            .limit(5).execute().data
+
+    return jsonify({
+        "users": au,
+        "slots": slots,
+        "dispense_daily": daily,
+        "top_meds": top,
+        "recent_users": recent
+    })
+
+# เติมสต็อกยา
+@app.post("/admin/refill")
+@require_login
+@require_admin
+def admin_refill_api():
+    data = request.get_json(silent=True) or {}
+    try:
+        slot = int(data.get("slot", 0))
+        qty  = int(data.get("qty", 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="invalid payload"), 400
+
+    if slot <= 0 or qty <= 0:
+        return jsonify(ok=False, error="slot/qty invalid"), 400
+
+    # ยืนยันว่ามี slot นี้จริง
+    row = supabase.table("slots").select("slot").eq("slot", slot).single().execute()
+    if not row.data:
+        return jsonify(ok=False, error="slot not found"), 404
+
+    # บันทึกลงเลดเจอร์ (ปล่อยให้คอลัมน์ ts ใช้ DEFAULT now() ฝั่ง DB)
+    supabase.table("stock_ledger").insert({
+    "slot": slot,
+    "qty_change": qty,           # ควรเป็นค่าบวกสำหรับเติมสต็อก
+    "reason": "refill",          # << ต้องเป็น reason ไม่ใช่ dispense
+    "actor": session.get("username", "admin"),
+    "note": "web refill"
+    }).execute()
+
+    # อ่านสต็อกล่าสุดตอบกลับ
+    cur = supabase.table("slots").select("current_stock").eq("slot", slot).single().execute()
+    new_stock = (cur.data or {}).get("current_stock")
+    return jsonify(ok=True, new_stock=new_stock), 200
+
+
+#ประวัติผู้ใช้
+@app.get("/users/history")
+@require_login
+@require_admin
+def users_history():
+    rows = supabase.table("v_user_history")\
+           .select("username,recommended_medicine,accept_medicine,dispense_status")\
+           .limit(200).execute().data
+    return render_template("user_history.html", rows=rows)
+
+#---------------------------------------------------------------------------------------------------------#
 
 # ----------------------- Medicine Meta -----------------------
 def get_medicine_info(medicine):
@@ -113,9 +212,13 @@ def login():
             if check_password_hash(user['password'], password):
                 session['username'] = user['username']
                 session['user_id'] = user['user_id']
+                session['role'] = user.get('role','user')
                 log_user_action(user['user_id'], "login")
                 flash("Login successful!", "success")
-                return redirect('/dashboard')
+                if session['role'] == 'admin':
+                    return redirect('/dash')
+                else:
+                    return redirect('/dashboard')
         flash("Incorrect username or password", "error")
     return render_template('login.html')
 
@@ -152,6 +255,13 @@ def back():
 @app.context_processor
 def inject_back_url():
     return {'back_url': getattr(g, 'back_url', url_for('dashboard'))}
+
+@app.context_processor
+def inject_flags():
+    return {
+        'is_admin': session.get('role') == 'admin',
+        'user_role': session.get('role', 'user')
+    }
 
 @app.route('/logout')
 def logout():
@@ -457,6 +567,16 @@ def dispense_cancel():
     update_current_symptom({"dispense_status": "cancel"})
     return redirect('/goodbye')
 
+
 # ----------------------- Entrypoint -----------------------
+
+@app.get("/dash")
+@require_login
+@require_admin
+def dash_page():
+    return render_template("dash.html")
+
+
+
 if __name__ == '__main__':
     app.run(debug=True)

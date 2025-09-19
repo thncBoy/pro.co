@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <title>User History</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">User History</h3>
+    <a href="/dash" class="btn btn-outline-secondary btn-sm">← Back</a>
+  </div>
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <table class="table table-striped table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th style="width:20%;">User</th>
+            <th style="width:40%;">แนะนำยา</th>
+            <th style="width:20%;">รับ/ไม่รับ</th>
+            <th style="width:20%;">จ่ายสำเร็จ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="fw-semibold">{{ r.username }}</td>
+            <td>{{ r.recommended_medicine or '-' }}</td>
+            <td>
+              {% if r.accept_medicine == 'รับยา' %}
+                <span class="badge bg-success">รับยา</span>
+              {% elif r.accept_medicine %}
+                <span class="badge bg-secondary">{{ r.accept_medicine }}</span>
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if r.dispense_status == 'success' %}
+                <span class="badge bg-primary">success</span>
+              {% elif r.dispense_status %}
+                <span class="badge bg-warning text-dark">{{ r.dispense_status }}</span>
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="4" class="text-center text-muted">No data</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>
