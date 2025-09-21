@@ -2,6 +2,8 @@
 from flask import Flask, render_template, request, redirect, session, flash, g, url_for,jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+from datetime import datetime, timedelta, timezone
+from collections import Counter, defaultdict
 import os
 from connDB import supabase
 from iot_client import iot_dispense
@@ -52,40 +54,89 @@ def update_current_symptom(update_dict: dict):
 
 
 # ===== Dashboard JSON =====
+def _range_params(key: str):
+    key = (key or "month").lower()
+    now = datetime.now(timezone.utc)
+    if key == "day":
+        start = now - timedelta(days=1)
+        bucket = "hour"   # ถ้าอยากเป็นรายชั่วโมงภายใน 24 ชม.
+    elif key == "week":
+        start = now - timedelta(days=7)
+        bucket = "day"
+    elif key == "year":
+        start = now - timedelta(days=365)
+        bucket = "month"
+    else:  # "month" (default)
+        start = now - timedelta(days=30)
+        bucket = "day"
+    return key, start.isoformat(), now.isoformat(), bucket
+
+def _label_for(dt_iso: str, bucket: str):
+    # dt_iso -> label สั้น ๆ สำหรับกราฟ
+    dt = datetime.fromisoformat(dt_iso.replace("Z","+00:00"))
+    if bucket == "hour":
+        return dt.strftime("%d %b %H:00")
+    if bucket == "month":
+        return dt.strftime("%b %Y")
+    return dt.strftime("%d %b")
 @app.get("/dash/data")
 @require_login
 def dash_data():
-    # 1) ผู้ใช้
+    # ช่วงเวลา + รูปแบบ bucket สำหรับกราฟ
+    rkey, start_iso, end_iso, bucket = _range_params(request.args.get("range"))
+
+    # 1) ผู้ใช้รวม/แอคทีฟ
     au = supabase.table("v_active_users").select("*").execute().data
     au = au[0] if au else {"total_users": 0, "dau_7d": 0, "mau_30d": 0}
 
-    # 2) สต๊อก
+    # 2) สต็อก (low stock view)
     slots = supabase.table("v_low_stock").select("*").execute().data
 
-    # 3) จ่ายรายวัน
-    daily = supabase.table("v_dispense_daily").select("*").execute().data
-
-    # 4) Top ยา
-    top = supabase.table("v_top_medicines_30d").select("*").limit(10).execute().data
-
-    # 5) สถานะตู้จาก ESP32
+    # 3) กราฟจ่ายยาตามช่วงเวลา (RPC)
     try:
-        from iot_client import iot_status  # ใช้ฟังก์ชันที่คุณมีอยู่แล้ว:contentReference[oaicite:9]{index=9}
-        device = iot_status()              # proxy ได้จาก blueprint /iot ด้วยก็ได้:contentReference[oaicite:10]{index=10}
-    except Exception as e:
-        device = {"ok": False, "error": str(e)}
+        ser = supabase.rpc("rpc_dispense_series", {
+            "p_start": start_iso,
+            "p_end":   end_iso,
+            "p_bucket": bucket  # 'hour' | 'day' | 'month'
+        }).execute().data or []
+    except Exception:
+        ser = []
+    # front-end ต้องการ key ชื่อ 'count'
+    series = [{"label": s.get("label"), "count": s.get("cnt", 0)} for s in ser]
 
-    recent = supabase.table("v_recent_users_min")\
-            .select("username,recommended_medicine,accept_medicine,dispense_status")\
-            .limit(5).execute().data
+    # 4) Top ยาในช่วงเวลา (RPC)
+    try:
+        top = supabase.rpc("rpc_top_meds", {
+            "p_start": start_iso,
+            "p_end":   end_iso,
+            "p_limit": 10
+        }).execute().data or []
+    except Exception:
+        top = []
+
+    # 5) ผู้ใช้ล่าสุด (รวมอาการ) (RPC)
+    try:
+        recent = supabase.rpc("rpc_recent_users", {
+            "p_start": start_iso,
+            "p_end":   end_iso,
+            "p_limit": 10
+        }).execute().data or []
+    except Exception:
+        recent = []
+
+    # 6) สถานะเครื่อง (ในโหมดคลาวด์ให้คง ok=True ไว้)
+    device = {"ok": True, "range": rkey}
 
     return jsonify({
+        "range": rkey,
         "users": au,
         "slots": slots,
-        "dispense_daily": daily,
-        "top_meds": top,
-        "recent_users": recent
+        "dispense_series": series,  # [{label, count}]
+        "top_meds": top,            # [{med, cnt}]
+        "recent_users": recent,     # [{created_at, username, symptom, recommended_medicine, accept_medicine, dispense_status}]
+        "device": device
     })
+
 
 # เติมสต็อกยา
 @app.post("/admin/refill")
@@ -127,9 +178,10 @@ def admin_refill_api():
 @require_login
 @require_admin
 def users_history():
-    rows = supabase.table("v_user_history")\
-           .select("username,recommended_medicine,accept_medicine,dispense_status")\
-           .limit(200).execute().data
+    try:
+        rows = supabase.rpc("rpc_user_history", {"p_limit": 200}).execute().data or []
+    except Exception:
+        rows = []
     return render_template("user_history.html", rows=rows)
 
 #---------------------------------------------------------------------------------------------------------#
@@ -476,12 +528,48 @@ def recommend_medicine():
 @app.route('/dispense_success', methods=['GET'])
 @require_login
 def dispense_success():
-    medicine = session.get('medicine', 'ยา')
+    medicine = session.get('medicine')
+    if not medicine:
+        flash("ไม่พบข้อมูลยา", "error")
+        return redirect('/dashboard')
+
     try:
+        # update symptoms
         update_current_symptom({"dispense_status": "success"})
-    except Exception:
-        pass
-    return render_template('dispense_success.html', medicine=medicine, redirect_ms=4000)
+
+        # หา slot ของยา
+        slot = SLOT_BY_MEDICINE.get(medicine)
+        if slot:
+            # เตรียมค่า
+            user = session.get('username', 'system')
+            req_id = str(session.get('symptom_id', ''))
+
+            # 1) insert ลง stock_ledger
+            supabase.table("stock_ledger").insert({
+                "slot": slot,
+                "qty_change": -1,
+                "reason": "dispense",
+                "request_id": req_id,
+                "actor": user,
+                "note": f"dispensed {medicine}"
+            }).execute()
+
+            # 2) update slots.current_stock
+            current = supabase.table("slots").select("current_stock")\
+                        .eq("slot", slot).execute().data
+            if current:
+                new_val = max(0, (current[0]["current_stock"] or 0) - 1)
+                supabase.table("slots")\
+                    .update({"current_stock": new_val})\
+                    .eq("slot", slot).execute()
+
+    except Exception as e:
+        app.logger.error(f"Error updating stock for {medicine}: {e}")
+
+    return render_template('dispense_success.html',
+                           medicine=medicine,
+                           redirect_ms=4000)
+
 
 MAX_RETRY = 2
 DEFAULT_MAX_WAIT_MS = 60000
