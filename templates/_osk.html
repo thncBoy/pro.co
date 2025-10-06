@@ -1,0 +1,170 @@
+<div id="osk" class="osk-container">
+    <div class="osk-header">
+        <span class="osk-title">แป้นพิมพ์</span>
+        <button type="button" class="osk-close-btn">&times;</button>
+    </div>
+    <div class="osk-keys">
+        </div>
+</div>
+
+<style>
+    .osk-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #e9ecef;
+        padding: 8px;
+        z-index: 1050;
+        border-top: 1px solid #ccc;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        display: none;
+        user-select: none;
+        max-width: 100%;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .osk-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 8px 8px 8px;
+    }
+    .osk-title {
+        font-weight: 600;
+        color: #495057;
+    }
+    .osk-close-btn {
+        border: none;
+        background: transparent;
+        font-size: 1.5rem;
+        line-height: 1;
+        cursor: pointer;
+        color: #6c757d;
+    }
+    .osk-keys {
+        display: grid;
+        justify-content: center;
+        gap: 5px;
+    }
+    .osk-row {
+        display: flex;
+        justify-content: center;
+        gap: 5px;
+    }
+    .osk-key {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        height: 40px;
+        min-width: 32px;
+        padding: 0 5px;
+        transition: background-color 0.1s;
+        flex-grow: 1;
+    }
+    .osk-key:active {
+        background-color: #0d6efd;
+        color: #fff;
+    }
+    .special-key {
+        background-color: #adb5bd;
+        color: white;
+        flex-grow: 1.5; /* Make special keys slightly wider */
+    }
+    .special-key.active {
+        background-color: #0d6efd;
+    }
+    .space-key {
+        flex-grow: 8; /* Make spacebar much wider */
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const oskContainer = document.getElementById('osk');
+    const oskKeysContainer = oskContainer.querySelector('.osk-keys');
+    const closeBtn = oskContainer.querySelector('.osk-close-btn');
+    let activeInput = null;
+    let isCaps = false;
+
+    const keysLayout = [
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+        ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+        ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+        ['⇧', 'z', 'x', 'c', 'v', 'b', 'n', 'm', '⌫'],
+        [' ']
+    ];
+
+    function renderKeys() {
+        oskKeysContainer.innerHTML = ''; // Clear existing keys
+        keysLayout.forEach(row => {
+            const rowElement = document.createElement('div');
+            rowElement.className = 'osk-row';
+            row.forEach(key => {
+                const keyElement = document.createElement('button');
+                keyElement.className = 'osk-key';
+                keyElement.setAttribute('type', 'button');
+
+                const keyText = (isCaps && key.length === 1) ? key.toUpperCase() : key.toLowerCase();
+                keyElement.textContent = keyText;
+
+                switch (key) {
+                    case '⇧':
+                        keyElement.classList.add('special-key');
+                        if (isCaps) keyElement.classList.add('active');
+                        keyElement.addEventListener('click', () => {
+                            isCaps = !isCaps;
+                            renderKeys(); // Re-render keys to show case change
+                        });
+                        break;
+                    case '⌫':
+                        keyElement.classList.add('special-key');
+                        keyElement.addEventListener('click', () => {
+                            if (activeInput) {
+                                activeInput.value = activeInput.value.slice(0, -1);
+                            }
+                        });
+                        break;
+                    case ' ':
+                        keyElement.classList.add('space-key');
+                         keyElement.addEventListener('click', () => {
+                            if (activeInput) activeInput.value += ' ';
+                        });
+                        break;
+                    default:
+                        keyElement.addEventListener('click', () => {
+                            if (activeInput) {
+                                activeInput.value += keyText;
+                            }
+                        });
+                        break;
+                }
+                rowElement.appendChild(keyElement);
+            });
+            oskKeysContainer.appendChild(rowElement);
+        });
+    }
+
+    // Initial render
+    renderKeys();
+
+    // Event listeners
+    closeBtn.addEventListener('click', () => {
+        oskContainer.style.display = 'none';
+        activeInput = null;
+    });
+
+    document.querySelectorAll('.osk-trigger').forEach(input => {
+        input.addEventListener('focus', (e) => {
+            // This is handled by the main page's script to move the card
+            activeInput = e.target;
+            oskContainer.style.display = 'block';
+        });
+    });
+});
+</script>

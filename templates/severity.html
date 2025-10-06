@@ -98,7 +98,7 @@
     <div class="card shadow mx-auto" style="max-width: 540px;">
       <div class="card-body">
         <h2 class="mb-4 text-center text-primary">เลือกระดับความปวด</h2>
-        <form method="POST" action="/submit_severity" autocomplete="off">
+        <form id="severity-form" method="POST" action="/submit_severity" autocomplete="off">
           {% set pain_levels = [
             {"level":1, "title":"ปวดแทบไม่รู้สึก", "desc":"เหมือนมีอาการเล็กน้อย ไม่กระทบชีวิตประจำวัน"},
             {"level":2, "title":"ปวดเล็กน้อย", "desc":"รับรู้ได้ว่าเริ่มมีอาการ แต่ยังทำกิจกรรมตามปกติได้"},
@@ -122,10 +122,37 @@
             </span>
           </label>
           {% endfor %}
-          <button type="submit" class="btn btn-primary mt-4 w-100" style="font-size:1.2rem;">บันทึกระดับความปวด</button>
+          <button type="submit" class="btn btn-primary mt-4 w-100" style="font-size:1.2rem; display:none;">บันทึกระดับความปวด</button>
+          <input type="hidden" name="note" value="">
         </form>
       </div>
     </div>
   </div>
+  <script>
+    (function() {
+      var form = document.getElementById('severity-form');
+      if (!form) return;
+    
+      // กันกดซ้ำโดยไม่ต้อง disable input
+      var submitting = false;
+    
+      form.addEventListener('change', function(e) {
+        if (e.target && e.target.name === 'severity') {
+          if (submitting) return;   // กันกดซ้อน
+          submitting = true;
+    
+          // ส่งฟอร์มทันทีที่เลือก
+          if (form.requestSubmit) form.requestSubmit();
+          else form.submit();
+    
+          // ถ้าจะกันจิ้มซ้ำทาง UI ค่อย disable หลังส่งแล้ว (หน่วงนิดนึง)
+          // setTimeout(function() {
+          //   form.querySelectorAll('input[name="severity"]').forEach(function(el){ el.disabled = true; });
+          // }, 100);
+        }
+      });
+    })();
+    </script>
+    
 </body>
 </html>

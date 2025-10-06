@@ -17,6 +17,8 @@ def iot_status() -> dict:
     r.raise_for_status()   
     return r.json()
 
+
+
 def iot_dispense(slot: int) -> dict:
     """สั่งจ่ายยา /dispense?slot=<1..3>"""
     url = f"{get_dispenser_url()}/dispense"

@@ -3,33 +3,101 @@
 <head>
   <meta charset="utf-8" />
   <title>Smart Med Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
-  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
 
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Sarabun', sans-serif;
+      background-color: #f8f9fa;
+    }
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: 260px;
+      z-index: 100;
+      padding: 48px 0 0;
+      box-shadow: inset -1px 0 0 rgba(0, 0, 0, .1);
+      background-color: #fff;
+    }
+    .main-content {
+      margin-left: 260px;
+      padding: 20px;
+    }
+    .sidebar-sticky {
+      position: relative;
+      top: 0;
+      height: calc(100vh - 48px);
+      padding-top: .5rem;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .nav-link { color: #333; }
+    .nav-link.active { color: #0d6efd; font-weight: 500; }
+    .nav-link .fa-fw { width: 1.25em; }
+    .kpi-card {
+        border-left-width: 4px;
+        border-radius: .375rem;
+    }
+    .kpi-icon {
+        font-size: 2rem;
+        opacity: 0.3;
+    }
+
+    /* --- Skeleton Loader Styles --- */
+    .skeleton-loader { display: none; }
+    .skeleton {
+        animation: shimmer 1.5s infinite linear;
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        border-radius: .25rem;
+    }
+    .skeleton-text { height: 1em; margin-bottom: .5em; }
+    .skeleton-text-lg { height: 1.5em; width: 60%; }
+    .skeleton-row { display: flex; gap: 1rem; align-items: center; }
+    .skeleton-avatar { width: 40px; height: 40px; border-radius: 50%; }
+
+    @keyframes shimmer {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+  </style>
 </head>
-<body class="bg-light">
+<body>
 
-<div class="container py-3">
-
-  <!-- Navbar -->
-  <nav class="navbar navbar-expand-lg bg-white border rounded shadow-sm mb-3 px-3">
-    <a class="navbar-brand fw-semibold" href="#">Smart Med</a>
-    <div class="ms-auto d-flex align-items-center gap-2">
-      {% if is_admin %}<span class="badge bg-dark">ADMIN</span>{% endif %}
-      <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+<nav class="sidebar">
+  <div class="sidebar-sticky d-flex flex-column">
+    <div class="px-4 py-3">
+        <a class="navbar-brand fw-bold fs-4" href="#"><i class="fa-solid fa-cubes-stacked me-2"></i>Smart Med</a>
     </div>
-  </nav>
+    <ul class="nav flex-column px-2">
+      <li class="nav-item"><a class="nav-link active" href="#"><i class="fa-solid fa-chart-line fa-fw me-2"></i> Dashboard</a></li>
+      <li class="nav-item"><a class="nav-link" href="/users/history"><i class="fa-solid fa-users fa-fw me-2"></i> User History</a></li>
+    </ul>
+    <div class="mt-auto p-3 border-top">
+        <div class="d-flex align-items-center gap-2">
+            <i class="fa-solid fa-circle-user fs-3 text-muted"></i>
+            <div>
+                <span class="fw-semibold d-block">{% if is_admin %}Admin User{% else %}User{% endif %}</span>
+                {% if is_admin %}<span class="badge bg-dark small">ADMIN</span>{% endif %}
+            </div>
+            <a href="/logout" class="btn btn-outline-danger btn-sm ms-auto" title="Logout"><i class="fa-solid fa-right-from-bracket"></i></a>
+        </div>
+    </div>
+  </div>
+</nav>
 
-  <div class="d-flex align-items-center justify-content-between mb-2">
-    <h1 class="h4 mb-0">💊 Smart Med Dispenser — Dashboard</h1>
-
-    <!-- Time range filter -->
+<main class="main-content">
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <h1 class="h3 mb-0 text-dark">💊 Dashboard</h1>
     <div class="d-flex gap-2 align-items-center">
       <label for="rangeSel" class="small text-muted">ช่วงเวลา</label>
       <select id="rangeSel" class="form-select form-select-sm" style="width:auto">
@@ -41,79 +109,69 @@
     </div>
   </div>
 
-  <div class="row g-4">
+  <div class="row g-4 mb-4">
+    <div class="col-md-4 skeleton-loader"><div class="card shadow-sm"><div class="card-body"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text-lg"></div></div></div></div>
+    <div class="col-md-4 skeleton-loader"><div class="card shadow-sm"><div class="card-body"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text-lg"></div></div></div></div>
+    <div class="col-md-4 skeleton-loader"><div class="card shadow-sm"><div class="card-body"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text-lg"></div></div></div></div>
+    <div id="kpi-cards-container" class="row g-4 m-0"></div>
+  </div>
 
-    <!-- Users summary -->
-    <div class="col-md-4">
-      <div class="card shadow">
-        <div class="card-header fw-bold">Users</div>
-        <div class="card-body">
-          <div id="userBox" class="h5">Loading…</div>
+  <div class="row g-4">
+    <div class="col-lg-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-header fw-bold">Dispensed per Period</div>
+        <div class="card-body position-relative">
+          <div class="skeleton-loader h-100"><div class="skeleton h-100"></div></div>
+          <canvas id="dailyChart" style="display: none;"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- Recent Users -->
-    <div class="col-md-8">
-      <div class="card shadow">
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header fw-bold">Top Medicines (by range)</div>
+        <div class="card-body">
+          <div class="skeleton-loader"><div class="skeleton skeleton-text w-100 mb-2"></div><div class="skeleton skeleton-text w-100 mb-2"></div><div class="skeleton skeleton-text w-100"></div></div>
+          <ol id="topList" class="list-group list-group-flush"></ol>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-lg-7">
+      <div class="card shadow-sm">
+        <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+          <span><i class="fa-solid fa-boxes-stacked me-2"></i>Stock (Medicines)</span>
+          <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#refillModal"><i class="fa-solid fa-plus me-1"></i> Refill</button>
+        </div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-striped table-hover text-center align-middle small mb-0">
+              <thead class="table-light"><tr><th>Slot</th><th class="text-start">Medicine</th><th>Stock</th><th>Threshold</th><th>Status</th></tr></thead>
+              <tbody id="stockTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="card shadow-sm">
         <div class="card-header fw-bold d-flex justify-content-between align-items-center">
           <span>Recent Users</span>
           <a href="/users/history" class="btn btn-sm btn-outline-primary">View All</a>
         </div>
-        <div class="card-body">
-          <ul id="recentList" class="list-group small"></ul>
+        <div class="card-body p-0">
+          <div class="skeleton-loader p-3">
+            <div class="skeleton-row mb-3"><div class="skeleton skeleton-avatar"></div><div class="w-100"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text w-75"></div></div></div>
+            <div class="skeleton-row"><div class="skeleton skeleton-avatar"></div><div class="w-100"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text w-75"></div></div></div>
+          </div>
+          <ul id="recentList" class="list-group list-group-flush small"></ul>
         </div>
       </div>
     </div>
-
-    <!-- Chart -->
-    <div class="col-md-8">
-      <div class="card shadow">
-        <div class="card-header fw-bold">Dispensed per Period</div>
-        <div class="card-body">
-          <canvas id="dailyChart" height="300"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- Top meds -->
-    <div class="col-md-4">
-      <div class="card shadow">
-        <div class="card-header fw-bold">Top Medicines (by range)</div>
-        <div class="card-body">
-          <ol id="topList" class="list-group list-group-numbered"></ol>
-        </div>
-      </div>
-    </div>
-
-    <!-- Stock table -->
-    <div class="col-md-12">
-      <div class="card shadow">
-        <div class="card-header fw-bold d-flex justify-content-between align-items-center">
-          <span>Low Stock</span>
-          <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#refillModal">+ Refill</button>
-        </div>
-        <div class="card-body">
-          <table id="stockTbl" class="table table-striped table-bordered text-center align-middle small mb-0">
-            <thead class="table-light">
-              <tr>
-                <th>Slot</th>
-                <th>Medicine</th>
-                <th>Stock</th>
-                <th>Threshold</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody><!-- filled by JS --></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
   </div>
-</div>
+</main>
 
-<!-- Refill Modal -->
 <div class="modal fade" id="refillModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <form id="refillForm" class="modal-content">
@@ -124,154 +182,164 @@
       <div class="modal-body">
         <div class="mb-3">
           <label class="form-label">เลือกยา</label>
-          <select id="refillMedicine" class="form-select" required></select>
+          <select id="refillMedicine" name="medicine_id" class="form-select" required></select>
         </div>
         <div class="mb-2">
           <label class="form-label">จำนวนที่เติม</label>
-          <input id="refillQty" type="number" min="1" class="form-control" placeholder="เช่น 10" required>
-          <div class="form-text">ระบบจะเพิ่มสต็อกของยาที่เลือกเท่านั้น</div>
+          <input id="refillQty" name="qty" type="number" min="1" class="form-control" placeholder="เช่น 10" required>
         </div>
-        <div id="refillMsg" class="small text-muted"></div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">ปิด</button>
-        <button id="refillSubmit" type="submit" class="btn btn-primary">บันทึก</button>
+        <button type="submit" class="btn btn-primary" id="refillSubmitBtn">บันทึก</button>
       </div>
     </form>
   </div>
 </div>
 
 <script>
-let dailyChart = null;
+/* ---------- element refs ---------- */
+const kpiContainer  = document.getElementById('kpi-cards-container');
+const topList       = document.getElementById('topList');
+const recentList    = document.getElementById('recentList');
+const stockTbody    = document.getElementById('stockTbody');
+const refillMedicine= document.getElementById('refillMedicine');
+const rangeSel      = document.getElementById('rangeSel');
+const skeletons     = document.querySelectorAll('.skeleton-loader');
+const chartCanvas   = document.getElementById('dailyChart');
+const refillForm    = document.getElementById('refillForm');
+const refillModalEl = document.getElementById('refillModal');
+// *** ADDED THIS REF ***
+const refillSubmitBtn = document.getElementById('refillSubmitBtn');
 
-async function load(range='month') {
-  const r = await fetch('/dash/data?range=' + encodeURIComponent(range));
-  const d = await r.json();
+let chart = null;
+let currentRange = rangeSel?.value || 'month';
 
-  // Users summary
-  const u = d.users || {};
-  document.getElementById('userBox').innerText =
-    `Total: ${u.total_users ?? 0} | Active 7d: ${u.dau_7d ?? 0} | Active 30d: ${u.mau_30d ?? 0}`;
-
-  // Recent users
-// Recent users
-const recent = d.recent_users || [];
-const limited = recent.slice(0, 5);   // <<< โชว์แค่ 5
-document.getElementById('recentList').innerHTML =
-  limited.length ? limited.map(x => `
-    <li class="list-group-item d-flex justify-content-between align-items-center">
-      <div>
-        <div class="fw-semibold">${x.username}</div>
-        <div class="small text-muted">
-          <span class="me-2">อาการ: ${x.symptom || '-'}</span>
-          <span class="me-2">แนะนำยา: ${x.recommended_medicine || '-'}</span>
-          <span class="badge ${x.accept_medicine==='รับยา' ? 'bg-success' : (x.accept_medicine ? 'bg-secondary' : 'bg-light text-dark')}">
-            ${x.accept_medicine || '-'}
-          </span>
-          <span class="badge ${x.dispense_status==='success' ? 'bg-primary' : (x.dispense_status ? 'bg-warning text-dark' : 'bg-light text-dark')} ms-1">
-            ${x.dispense_status || '-'}
-          </span>
-        </div>
-      </div>
-      <small class="text-muted">${x.created_at ? new Date(x.created_at).toLocaleString() : '-'}</small>
-    </li>
-  `).join('') : `<li class="list-group-item text-muted">No recent users</li>`;
-
-
-  // Chart series
-  const labels = (d.dispense_series||[]).map(x=>x.label);
-  const data   = (d.dispense_series||[]).map(x=>x.count);
-  if (dailyChart) dailyChart.destroy();
-  dailyChart = new Chart(document.getElementById('dailyChart'), {
-    type:'line',
-    data:{ labels,
-      datasets:[{ label:'Dispenses', data,
-        borderColor:'rgba(54, 162, 235, 1)',
-        backgroundColor:'rgba(54,162,235,0.2)',
-        pointBackgroundColor:'rgba(255,99,132,1)',
-        fill:true, tension:0.3 }]
-    },
-    options:{ responsive:true, maintainAspectRatio:false }
+/* ---------- utils ---------- */
+function showSkeletons(show) {
+  skeletons.forEach(el => el.style.display = show ? 'block' : 'none');
+  [kpiContainer, topList, recentList, stockTbody, chartCanvas].forEach(el => {
+    if (!el) return;
+    if (el.tagName === 'CANVAS') el.style.display = show ? 'none' : 'block';
+    else if (show) el.innerHTML = '';
   });
+}
 
-  // Top meds
-  document.getElementById('topList').innerHTML =
-    (d.top_meds||[]).length ? d.top_meds.map(x=>`
-      <li class="list-group-item d-flex justify-content-between align-items-center">
-        ${x.med} <span class="badge bg-primary rounded-pill">${x.cnt}</span>
-      </li>`).join('') : `<li class="list-group-item text-muted">No data</li>`;
+function pickStock(data) {
+  return data.slots || data.stock || data.medicines || data.v_medicines_state || [];
+}
 
-  // Stock + dropdown for modal
-  const slots = d.slots || [];
-  document.querySelector('#stockTbl tbody').innerHTML =
-    slots.length ? slots.map(x=>`
-      <tr class="${x.current_stock<=x.low_stock_thr ? 'table-danger' : ''}">
-        <td>#${x.slot}</td>
-        <td>${x.medicine_name||'-'}</td>
-        <td>${x.current_stock}</td>
-        <td>${x.low_stock_thr}</td>
-        <td>${x.current_stock<=x.low_stock_thr ? '⚠️ Low' : 'OK'}</td>
-      </tr>`).join('') : `<tr><td colspan="5" class="text-muted text-center">No stock rows</td></tr>`;
+function displayLabel(x) {
+  if (!x) return '-';
+  const d = new Date(x);
+  if (!isNaN(d.getTime())) return d.toLocaleString('th-TH', { dateStyle: 'medium', hour12:false });
+  return String(x);
+}
 
-  const sel = document.getElementById('refillMedicine');
-  if (sel) {
-    sel.innerHTML = slots.map(s =>
-      `<option value="${s.slot}">${s.medicine_name} (slot #${s.slot})</option>`
-    ).join('');
+/* ---------- core loader ---------- */
+async function loadDash(range = currentRange) {
+  currentRange = range;
+  showSkeletons(true);
+  try {
+    const r = await fetch(`/dash/data?range=${encodeURIComponent(range)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+
+    /* KPI */
+    const u = d.users || {};
+    kpiContainer.innerHTML = `
+      <div class="col-md-4"><div class="card shadow-sm kpi-card border-primary"><div class="card-body d-flex justify-content-between align-items-center"><div><div class="text-muted small">TOTAL USERS</div><div class="h4 fw-bold mb-0">${u.total_users ?? 0}</div></div><div class="kpi-icon text-primary"><i class="fa-solid fa-users"></i></div></div></div></div>
+      <div class="col-md-4"><div class="card shadow-sm kpi-card border-success"><div class="card-body d-flex justify-content-between align-items-center"><div><div class="text-muted small">ACTIVE (7 DAYS)</div><div class="h4 fw-bold mb-0">${u.dau_7d ?? 0}</div></div><div class="kpi-icon text-success"><i class="fa-solid fa-user-check"></i></div></div></div></div>
+      <div class="col-md-4"><div class="card shadow-sm kpi-card border-warning"><div class="card-body d-flex justify-content-between align-items-center"><div><div class="text-muted small">ACTIVE (30 DAYS)</div><div class="h4 fw-bold mb-0">${u.mau_30d ?? 0}</div></div><div class="kpi-icon text-warning"><i class="fa-solid fa-user-clock"></i></div></div></div></div>`;
+
+    /* Stock table + refill dropdown */
+    const stock = pickStock(d);
+    if (Array.isArray(stock) && stock.length) {
+      stockTbody.innerHTML = stock.map(x => {
+        const cs  = Number(x.current_stock ?? 0);
+        const thr = Number(x.low_stock_thr ?? 0);
+        let badge = `<span class="badge bg-success">In Stock</span>`;
+        if (cs <= 0) badge = `<span class="badge bg-danger">Out of Stock</span>`;
+        else if (cs <= thr) badge = `<span class="badge bg-warning text-dark">Low Stock</span>`;
+        return `<tr><td>#${x.slot ?? '-'}</td><td class="text-start">${x.medicine_name ?? '-'}</td><td>${cs}</td><td>${(x.low_stock_thr ?? '-')}</td><td>${badge}</td></tr>`;
+      }).join('');
+      refillMedicine.innerHTML = stock.map(x => `<option value="${x.medicine_id ?? ''}" ${x.medicine_id ? '' : 'disabled'}>${x.medicine_name ?? '—'} (slot #${x.slot ?? '-'})</option>`).join('');
+    } else {
+      stockTbody.innerHTML = `<tr><td colspan="5" class="text-muted text-center">No stock data</td></tr>`;
+      refillMedicine.innerHTML = '';
+    }
+
+    /* Chart */
+    const series = Array.isArray(d.dispense_series) ? d.dispense_series : [];
+    const labels = series.map(s => displayLabel(s.label));
+    const data   = series.map(s => Number(s.count ?? s.cnt ?? 0));
+    if (!chart) {
+      chart = new Chart(chartCanvas, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Dispensed', data, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.12)', fill: true, tension: 0.3, pointRadius: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+    } else {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = data;
+      chart.update('none');
+    }
+
+    /* Top meds */
+    const top = Array.isArray(d.top_meds) ? d.top_meds : [];
+    topList.innerHTML = top.length ? top.map(x => `<li class="list-group-item d-flex justify-content-between align-items-center">${x.med ?? x.medicine_name ?? '-'}<span class="badge bg-primary rounded-pill">${x.cnt ?? x.count ?? 0}</span></li>`).join('') : `<li class="list-group-item text-muted">No data</li>`;
+
+    /* Recent users */
+    const recent = Array.isArray(d.recent_users) ? d.recent_users.slice(0, 5) : [];
+    recentList.innerHTML = recent.length ? recent.map(x => `<li class="list-group-item d-flex justify-content-between align-items-center py-3 px-3"><div class="d-flex align-items-center"><div class="me-3 text-muted"><i class="fa-solid fa-user-circle fs-4"></i></div><div><b>${x.username ?? '-'}</b><span class="text-muted">· ${x.symptom ?? '-'}</span><div class="small text-primary">${x.recommended_medicine ?? '-'}</div></div></div><span class="text-muted small">${x.created_at ? new Date(x.created_at).toLocaleString('th-TH') : '-'}</span></li>`).join('') : `<li class="list-group-item text-muted">No recent users</li>`;
+
+  } catch (err) {
+    console.error('loadDash failed:', err);
+    kpiContainer.innerHTML = `<div class="col-12"><div class="alert alert-danger text-center">ไม่สามารถโหลดข้อมูลได้ <button class="btn btn-danger btn-sm ms-2" onclick="loadDash()">ลองใหม่</button></div></div>`;
+  } finally {
+    showSkeletons(false);
   }
 }
 
-// Filter change
-document.getElementById('rangeSel')?.addEventListener('change', (e)=>{
-  load(e.target.value);
-});
-
-// Refill submit
-document.getElementById('refillForm')?.addEventListener('submit', async (e) => {
+/* ---------- refill via fetch (no page reload) ---------- */
+refillForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const btn = document.getElementById('refillSubmit');
-  const msg = document.getElementById('refillMsg');
-  btn.disabled = true; msg.className='small text-muted'; msg.textContent='กำลังบันทึก...';
-
-  const slot = parseInt(document.getElementById('refillMedicine').value, 10);
-  const qty  = parseInt(document.getElementById('refillQty').value, 10);
+  const medId = refillMedicine.value;
+  const qty   = document.getElementById('refillQty').value;
+  if (!medId || !qty) return;
 
   try {
+    // *** FIXED: Use correct button reference ***
+    refillSubmitBtn.disabled = true;
+    refillSubmitBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>กำลังบันทึก`;
+
     const res = await fetch('/admin/refill', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ slot, qty })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: new URLSearchParams({ medicine_id: medId, qty })
     });
-
-    const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      const text = await res.text();
-      throw new Error(`HTTP ${res.status}: ${text.slice(0,120)}`);
-    }
-    const j = await res.json();
-    if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
-
-    msg.className='small text-success';
-    msg.textContent = `สำเร็จ! สต็อกใหม่ = ${j.new_stock ?? 'N/A'}`;
-
-    setTimeout(() => {
-      bootstrap.Modal.getInstance(document.getElementById('refillModal'))?.hide();
-      document.getElementById('refillForm').reset();
-      // reload with current range
-      const cur = document.getElementById('rangeSel')?.value || 'month';
-      load(cur);
-    }, 600);
-
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
+    
+    const modal = bootstrap.Modal.getInstance(refillModalEl) || new bootstrap.Modal(refillModalEl);
+    modal.hide();
+    
+    await loadDash(currentRange);
   } catch (err) {
-    msg.className='small text-danger';
-    msg.textContent = 'ผิดพลาด: ' + err.message;
+    console.error('Refill failed:', err);
+    alert('เติมยาไม่สำเร็จ: ' + err.message);
   } finally {
-    btn.disabled = false;
+    // *** FIXED: Use correct button reference ***
+    refillSubmitBtn.disabled = false;
+    refillSubmitBtn.innerHTML = 'บันทึก';
   }
 });
 
-// first render
-load(document.getElementById('rangeSel')?.value || 'month');
+/* ---------- range filter ---------- */
+rangeSel?.addEventListener('change', (e) => loadDash(e.target.value));
+
+/* ---------- first load ---------- */
+loadDash(currentRange);
 </script>
 
 </body>

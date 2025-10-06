@@ -46,11 +46,24 @@ def log_user_action(user_id, action):
     if action in ("login", "logout"):
         supabase.table('user_logs').insert({'user_id': user_id, 'action': action}).execute()
 
-def update_current_symptom(update_dict: dict):
-    """อัปเดตแถว symptoms ปัจจุบันด้วยคีย์ใหม่ symptom_id"""
-    symptom_id = session.get('symptom_id')
-    if symptom_id:
-        supabase.table('symptoms').update(update_dict).eq('symptom_id', symptom_id).execute()
+def update_current_symptom(fields: dict):
+    """อัปเดตข้อมูลใน case_logs ของ session ปัจจุบัน"""
+
+    sid = session.get("symptom_id")
+    if not sid:
+        return None
+
+    # แปลงกรณีส่ง medicine_name → ให้หาว่า medicine_id อะไร
+    if "medicine" in fields and "medicine_id" not in fields:
+        med_name = fields.pop("medicine")
+        q = supabase.table("medicines").select("medicine_id").eq("medicine_name", med_name).execute()
+        if q.data:
+            fields["medicine_id"] = q.data[0]["medicine_id"]
+
+    # เขียนลง DB
+    res = supabase.table("case_logs").update(fields).eq("symptom_id", sid).execute()
+    return res.data
+
 
 
 # ===== Dashboard JSON =====
@@ -58,120 +71,114 @@ def _range_params(key: str):
     key = (key or "month").lower()
     now = datetime.now(timezone.utc)
     if key == "day":
-        start = now - timedelta(days=1)
-        bucket = "hour"   # ถ้าอยากเป็นรายชั่วโมงภายใน 24 ชม.
+        start, bucket = now - timedelta(days=1), "hour"
     elif key == "week":
-        start = now - timedelta(days=7)
-        bucket = "day"
+        start, bucket = now - timedelta(days=7), "day"
     elif key == "year":
-        start = now - timedelta(days=365)
-        bucket = "month"
-    else:  # "month" (default)
-        start = now - timedelta(days=30)
-        bucket = "day"
+        start, bucket = now - timedelta(days=365), "month"
+    else:  # month (default 30 วัน)
+        start, bucket = now - timedelta(days=30), "day"
     return key, start.isoformat(), now.isoformat(), bucket
 
-def _label_for(dt_iso: str, bucket: str):
-    # dt_iso -> label สั้น ๆ สำหรับกราฟ
-    dt = datetime.fromisoformat(dt_iso.replace("Z","+00:00"))
-    if bucket == "hour":
-        return dt.strftime("%d %b %H:00")
-    if bucket == "month":
-        return dt.strftime("%b %Y")
+
+def _label(dt: datetime, bucket: str) -> str:
+    if bucket == "hour":  return dt.strftime("%d %b %H:00")
+    if bucket == "month": return dt.strftime("%b %Y")
     return dt.strftime("%d %b")
-@app.get("/dash/data")
-@require_login
+
+# ---------- API สำหรับแดชบอร์ด ----------
+@app.route('/dash/data')
+@require_admin
 def dash_data():
-    # ช่วงเวลา + รูปแบบ bucket สำหรับกราฟ
-    rkey, start_iso, end_iso, bucket = _range_params(request.args.get("range"))
+    # resolve range -> start_ts
+    range_map = {'day': 1, 'week': 7, 'month': 30, 'year': 365}
+    rng = range_map.get(request.args.get('range', 'month'), 30)
+    start_ts = (datetime.now(timezone.utc) - timedelta(days=rng)).isoformat()
 
-    # 1) ผู้ใช้รวม/แอคทีฟ
-    au = supabase.table("v_active_users").select("*").execute().data
-    au = au[0] if au else {"total_users": 0, "dau_7d": 0, "mau_30d": 0}
+    out = {}
 
-    # 2) สต็อก (low stock view)
-    slots = supabase.table("v_low_stock").select("*").execute().data
-
-    # 3) กราฟจ่ายยาตามช่วงเวลา (RPC)
+    # 1) Users summary (วิวมาตรฐาน)
     try:
-        ser = supabase.rpc("rpc_dispense_series", {
-            "p_start": start_iso,
-            "p_end":   end_iso,
-            "p_bucket": bucket  # 'hour' | 'day' | 'month'
-        }).execute().data or []
+        ua = supabase.from_('v_active_users').select('total_users,dau_7d,mau_30d').limit(1).execute().data
+        out['users'] = ua[0] if ua else {'total_users': 0, 'dau_7d': 0, 'mau_30d': 0}
     except Exception:
-        ser = []
-    # front-end ต้องการ key ชื่อ 'count'
-    series = [{"label": s.get("label"), "count": s.get("cnt", 0)} for s in ser]
+        out['users'] = {'total_users': 0, 'dau_7d': 0, 'mau_30d': 0}
 
-    # 4) Top ยาในช่วงเวลา (RPC)
+    # 2) Stock (ให้ FE ใช้เติม select dropdown ด้วย)
     try:
-        top = supabase.rpc("rpc_top_meds", {
-            "p_start": start_iso,
-            "p_end":   end_iso,
-            "p_limit": 10
-        }).execute().data or []
+        stock = supabase.from_('v_medicines_stock')\
+            .select('medicine_id,slot,medicine_name,current_stock,low_stock_thr')\
+            .execute().data or []
+        out['stock'] = stock
     except Exception:
-        top = []
+        out['stock'] = []
 
-    # 5) ผู้ใช้ล่าสุด (รวมอาการ) (RPC)
+    # 3) Dispense series — กรองด้วย event_ts (timestamp) ไม่ใช่ label (string)
     try:
-        recent = supabase.rpc("rpc_recent_users", {
-            "p_start": start_iso,
-            "p_end":   end_iso,
-            "p_limit": 10
-        }).execute().data or []
+        rows = supabase.from_('mv_dispense_events')\
+            .select('label,count,event_ts')\
+            .gte('event_ts', start_ts)\
+            .order('event_ts')\
+            .execute().data or []
+        out['dispense_series'] = [{'label': r['label'], 'count': r.get('count', 0)} for r in rows]
     except Exception:
-        recent = []
+        out['dispense_series'] = []
 
-    # 6) สถานะเครื่อง (ในโหมดคลาวด์ให้คง ok=True ไว้)
-    device = {"ok": True, "range": rkey}
+    # 4) Top meds (ใช้วิว enriched + นับจาก medicine_name)
+    try:
+        top_rows = supabase.from_('v_case_logs_enriched')\
+            .select('medicine_name,created_at')\
+            .gte('created_at', start_ts)\
+            .execute().data or []
+        cnt = Counter([r['medicine_name'] for r in top_rows if r.get('medicine_name')])
+        out['top_meds'] = [{'med': m, 'cnt': c} for m, c in cnt.most_common(10)]
+    except Exception:
+        out['top_meds'] = []
 
-    return jsonify({
-        "range": rkey,
-        "users": au,
-        "slots": slots,
-        "dispense_series": series,  # [{label, count}]
-        "top_meds": top,            # [{med, cnt}]
-        "recent_users": recent,     # [{created_at, username, symptom, recommended_medicine, accept_medicine, dispense_status}]
-        "device": device
-    })
+    # 5) Recent users (แสดง 5-6 รายล่าสุด)
+    try:
+        recent = supabase.from_('v_case_logs_enriched')\
+            .select('created_at,username,symptom,medicine_name,accept_medicine,dispense_status')\
+            .order('created_at', desc=True).limit(6)\
+            .execute().data or []
+        out['recent_users'] = [{
+            'created_at': r['created_at'],
+            'username': r.get('username'),
+            'symptom': r.get('symptom'),
+            'recommended_medicine': r.get('medicine_name'),
+            'accept_medicine': r.get('accept_medicine'),
+            'dispense_status': r.get('dispense_status') or '-'
+        } for r in recent]
+    except Exception:
+        out['recent_users'] = []
 
+    return jsonify(out)
 
+    
+    
 # เติมสต็อกยา
 @app.post("/admin/refill")
 @require_login
 @require_admin
-def admin_refill_api():
-    data = request.get_json(silent=True) or {}
-    try:
-        slot = int(data.get("slot", 0))
-        qty  = int(data.get("qty", 0))
-    except (TypeError, ValueError):
-        return jsonify(ok=False, error="invalid payload"), 400
+def admin_refill():
+    if request.is_json:                           # เรียกผ่าน fetch()
+        payload = request.get_json(silent=True) or {}
+        med_id = int(payload.get("medicine_id", 0))
+        qty    = int(payload.get("qty", 0))
+        if med_id <= 0 or qty <= 0:
+            return jsonify(ok=False, error="invalid payload"), 400
+        supabase.rpc("refill_stock", {"p_medicine_id": med_id, "p_qty": qty}).execute()
+        return jsonify(ok=True)
 
-    if slot <= 0 or qty <= 0:
-        return jsonify(ok=False, error="slot/qty invalid"), 400
-
-    # ยืนยันว่ามี slot นี้จริง
-    row = supabase.table("slots").select("slot").eq("slot", slot).single().execute()
-    if not row.data:
-        return jsonify(ok=False, error="slot not found"), 404
-
-    # บันทึกลงเลดเจอร์ (ปล่อยให้คอลัมน์ ts ใช้ DEFAULT now() ฝั่ง DB)
-    supabase.table("stock_ledger").insert({
-    "slot": slot,
-    "qty_change": qty,           # ควรเป็นค่าบวกสำหรับเติมสต็อก
-    "reason": "refill",          # << ต้องเป็น reason ไม่ใช่ dispense
-    "actor": session.get("username", "admin"),
-    "note": "web refill"
-    }).execute()
-
-    # อ่านสต็อกล่าสุดตอบกลับ
-    cur = supabase.table("slots").select("current_stock").eq("slot", slot).single().execute()
-    new_stock = (cur.data or {}).get("current_stock")
-    return jsonify(ok=True, new_stock=new_stock), 200
-
+    # ---- fallback: submit จาก <form> ปกติ ----
+    med_id = int(request.form.get("medicine_id", 0))
+    qty    = int(request.form.get("qty", 0))
+    if med_id <= 0 or qty <= 0:
+        flash("ข้อมูลไม่ถูกต้อง", "error")
+        return redirect(url_for("dash_page"))
+    supabase.rpc("refill_stock", {"p_medicine_id": med_id, "p_qty": qty}).execute()
+    flash("เติมยาสำเร็จ!", "success")
+    return redirect(url_for("dash_page"))
 
 #ประวัติผู้ใช้
 @app.get("/users/history")
@@ -193,22 +200,25 @@ def get_medicine_info(medicine):
             "image": "พาราเซตามอล 500mg.jpg",
             "description": "ยาแก้ปวดลดไข้ เหมาะกับปวดศีรษะ ปวดเมื่อยตัว มีไข้",
             "usage": "รับประทานครั้งละ 1–2 เม็ด (500–1000 มก.) ทุก 4–6 ชม. เมื่อมีอาการ ไม่เกิน 8 เม็ด/วัน",
-            "doctor_advice": "ดื่มน้ำมาก ๆ พักผ่อนเพียงพอ หากมีไข้/ปวดเกิน 3 วัน หรืออาการแย่ลง ให้พบแพทย์",
-            "warning": "หลีกเลี่ยงการใช้ร่วมกับแอลกอฮอล์/ยาที่มีพาราเซตามอลซ้ำซ้อน ผู้ป่วยโรคตับควรปรึกษาแพทย์ก่อนใช้"
+            "doctor_advice": "ดื่มน้ำมาก ๆ พักผ่อนเพียงพอ หากมีไข้/ปวดเกิน 3 วัน หรืออาการแย่ลงแนะนำให้พบแพทย์ทันที",
+            "warning": "หลีกเลี่ยงการใช้ร่วมกับแอลกอฮอล์/ยาที่มีพาราเซตามอลซ้ำซ้อน ผู้ป่วยโรคตับควรปรึกษาแพทย์ก่อนใช้",
+            "audio": "paracetamol.mp3"
         },
         "เกลือแร่ ORS": {
             "image": "เกลือแร่ ORS.jpg",
             "description": "ทดแทนสารน้ำและเกลือแร่จากอาการท้องเสีย/อาเจียน",
             "usage": "ละลายผง 1 ซองในน้ำสะอาดตามปริมาณที่ระบุ จิบบ่อย ๆ ทีละน้อยจนดีขึ้น",
-            "doctor_advice": "สังเกตอาการขาดน้ำ (ปากแห้ง ปัสสาวะน้อย หน้ามืด) หากไม่ดีขึ้นใน 24 ชม. ให้พบแพทย์",
-            "warning": "ห้ามผสมนม/น้ำอัดลม ไม่ควรชงเข้ม/จางเกินไป ผู้ป่วยไต/หัวใจควรปรึกษาแพทย์ก่อน"
+            "doctor_advice": "ละลายน้ำแล้วค่อยๆจิบทีละน้อยจนหมด ห้ามดื่มทีเดียวหมด หากไม่ดีขึ้นใน 24 ชม. ให้พบแพทย์ทันที",
+            "warning": "ห้ามผสมนม/น้ำอัดลม ไม่ควรชงเข้ม/จางเกินไป ผู้ป่วยไต/หัวใจควรปรึกษาแพทย์ก่อน",
+            "audio": "ors.mp3"
         },
         "กาวิสคอน": {
             "image": "กาวิสคอน.jpg",
             "description": "บรรเทากรดไหลย้อน/แสบร้อนกลางอก",
             "usage": "รับประทานครั้งละ 10–20 มล. หลังอาหารและก่อนนอน",
-            "doctor_advice": "เลี่ยงอาหารมัน เผ็ด เปรี้ยวจัด งดนอนทันทีหลังอาหาร 2–3 ชม. หากอาการยังไม่ดีขึ้นให้พบแพทย์",
-            "warning": "หญิงตั้งครรภ์/ให้นม และผู้ป่วยไต ควรปรึกษาแพทย์ก่อนใช้ หากปวดท้องรุนแรง ถ่ายดำ อาเจียนเป็นเลือด ให้พบแพทย์ทันที"
+            "doctor_advice": "เลี่ยงอาหารมัน เผ็ด เปรี้ยวจัด งดนอนทันทีหลังอาหาร 2–3 ชม. หากอาการยังไม่ดีขึ้นให้พบแพทย์ทันที",
+            "warning": "หญิงตั้งครรภ์/ให้นม และผู้ป่วยไต ควรปรึกษาแพทย์ก่อนใช้ หากปวดท้องรุนแรง ถ่ายดำ อาเจียนเป็นเลือด ให้พบแพทย์ทันที",
+            "audio": "gaviscon.mp3"
         }
     }
     return medicine_db.get(medicine, {
@@ -216,7 +226,8 @@ def get_medicine_info(medicine):
         "description": "ยาเพื่อบรรเทาอาการเบื้องต้น",
         "usage": "-",
         "doctor_advice": "-",
-        "warning": "-"
+        "warning": "-",
+        "audio": "default.mp3"
     })
 
 # map ชื่อยา -> ช่องจ่าย
@@ -236,21 +247,33 @@ def register():
     if request.method == 'POST':
         username = request.form['username'].strip()
         password = request.form['password']
-        if not username or not password:
-            flash("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน", "error")
+        confirm  = request.form['confirm_password']
+
+        # ตรวจสอบช่องว่าง
+        if not username or not password or not confirm:
+            flash("กรุณากรอกข้อมูลให้ครบถ้วน", "error")
             return render_template('register.html')
 
-        hashed = generate_password_hash(password)
+        # ตรวจสอบว่ารหัสผ่านตรงกัน
+        if password != confirm:
+            flash("รหัสผ่านและการยืนยันรหัสผ่านไม่ตรงกัน", "error")
+            return render_template('register.html')
+
+        # เช็กซ้ำ username
         exist = supabase.table('users').select('user_id').eq('username', username).execute()
         if exist.data:
             flash("Username already exists", "error")
             return render_template('register.html')
 
+        # บันทึก
+        hashed = generate_password_hash(password)
         res = supabase.table('users').insert({'username': username, 'password': hashed}).execute()
         if res.data:
             flash("Registration successful! Please login.", "success")
             return redirect('/login')
+
         flash("Error: Cannot register user", "error")
+
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -336,24 +359,29 @@ def dashboard():
 @app.route('/select_symptom', methods=['POST'])
 @require_login
 def select_symptom():
-    raw = int(request.form.get('symptom_type_id'))
+    raw = request.form.get('symptom_type_id')
     if not raw:
         flash("กรุณาเลือกอาการ", "error")
         return redirect('/dashboard')
+
     symptom_type_id = int(raw)
     session['symptom_type_id'] = symptom_type_id
     user_id = session['user_id']
 
-    res = supabase.table('symptoms').insert({
+    # สร้าง case_logs entry
+    res = supabase.table('case_logs').insert({
         'user_id': user_id,
         'symptom_type_id': symptom_type_id
     }).execute()
+
     if res.data:
         session['symptom_id'] = res.data[0]['symptom_id']
 
+    # ดึงข้อมูลอาการ + ยาที่ผูกไว้
     q = supabase.table('symptom_types').select(
-        'name,skip_severity,ask_has_fever,suggested_medicine'
+        'name, skip_severity, ask_has_fever, medicine_id'
     ).eq('symptom_type_id', symptom_type_id).execute()
+
     if not q.data:
         flash("ไม่พบอาการนี้ในระบบ", "error")
         return redirect('/dashboard')
@@ -362,22 +390,36 @@ def select_symptom():
     name = row.get('name', '')
     skip_severity = row.get('skip_severity', False)
     ask_has_fever = row.get('ask_has_fever', True)
-    med = row.get('suggested_medicine', '')
+    med_id = row.get('medicine_id')
 
+    # ถ้ามีการ map ยาใน symptom_types ให้ query ชื่อยา
+    med_name = None
+    if med_id:
+        m = supabase.table('medicines').select('medicine_name').eq('medicine_id', med_id).execute()
+        if m.data:
+            med_name = m.data[0]['medicine_name']
+
+    # Logic
     if name == "อ่อนเพลียจากอาการท้องร่วง/ท้องเสีย":
-        update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
-        session['medicine'] = med
+        if med_id:
+            update_current_symptom({"medicine_id": med_id})
+            session['medicine'] = med_name
         return redirect('/recommend_medicine')
+
     elif name == "มีไข้":
         session['has_fever'] = True
         update_current_symptom({"has_fever": True})
         return redirect('/question_fever')
+
     elif skip_severity:
         return redirect('/question_pregnant')
+
     elif ask_has_fever:
         return redirect('/question_has_fever')
+
     else:
         return redirect('/severity')
+
 
 @app.route('/question_has_fever', methods=['GET', 'POST'])
 @require_login
@@ -388,24 +430,31 @@ def question_has_fever():
         update_current_symptom({"has_fever": has_fever})
 
         symptom_type_id = session.get('symptom_type_id')
-        q = supabase.table('symptom_types').select('name').eq('symptom_type_id', symptom_type_id).execute()
-        name = q.data[0]['name'] if q.data else ""
+        q = supabase.table('symptom_types').select('name, medicine_id').eq('symptom_type_id', symptom_type_id).execute()
+        row = q.data[0] if q.data else {}
+        name = row.get('name', "")
+        med_id = row.get('medicine_id')
 
+        # ปวดกล้ามเนื้อ + ไข้
         if name == "ปวดกล้ามเนื้อ":
             if has_fever:
-                update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
+                update_current_symptom({"dispense_status": "cancel"})  # ไม่จ่ายยา
                 session['medicine'] = None
-                return render_template('advise_doctor.html', reason=("เนื่องจากคุณมีอาการปวดกล้ามเนื้อร่วมกับไข้ "
-                                                                     "ซึ่งอาจเป็นสัญญาณของไข้หวัดใหญ่หรือโรคที่ต้องดูแลโดยแพทย์ "
-                                                                     "ขอแนะนำให้ไปพบแพทย์เพื่อรับการวินิจฉัยและรักษาที่เหมาะสม"))
+                return render_template('advise_doctor.html', reason=(
+                    "เนื่องจากคุณมีอาการปวดกล้ามเนื้อร่วมกับไข้ "
+                    "ซึ่งอาจเป็นสัญญาณของไข้หวัดใหญ่หรือโรคที่ต้องดูแลโดยแพทย์ "
+                    "ขอแนะนำให้ไปพบแพทย์เพื่อรับการวินิจฉัยและรักษาที่เหมาะสม"
+                ))
             else:
                 return redirect('/severity')
-        elif name in ["ปวดหัว"]:
+
+        elif name == "ปวดหัว":
             return redirect('/question_fever' if has_fever else '/severity')
+
         else:
             return redirect('/severity')
-    return render_template('question_has_fever.html')
 
+    return render_template('question_has_fever.html')
 @app.route('/question_fever', methods=['GET', 'POST'])
 @require_login
 def question_fever():
@@ -416,7 +465,7 @@ def question_fever():
         update_current_symptom({"muscle_pain": muscle_pain})
 
         if muscle_pain:
-            update_current_symptom({"severity_note": "แนะนำพบแพทย์ (ปวดเมื่อยกล้ามเนื้อ+ไข้)"})
+            update_current_symptom({"dispense_status": "cancel", "severity_note": "แนะนำพบแพทย์ (ปวดกล้ามเนื้อ+ไข้)"})
             session['medicine'] = None
             return render_template('advise_doctor.html',
                                    reason=("เนื่องจากคุณมีอาการปวดกล้ามเนื้อร่วมกับไข้ "
@@ -426,31 +475,35 @@ def question_fever():
             return redirect('/question_pregnant' if symptom_type_id == 8 else '/severity')
     return render_template('fever_muscle.html')
 
+
 @app.route('/severity')
 @require_login
 def severity():
     return render_template('severity.html')
 
+
 @app.route('/submit_severity', methods=['POST'])
 @require_login
 def submit_severity():
-    raw = int(request.form.get('severity'))
+    raw = request.form.get('severity')
     try:
         severity = int(raw)
     except (TypeError, ValueError):
         flash("กรุณาเลือกระดับความปวด", "error")
         return redirect('/severity')
-    severity = int(raw)
+
     note = request.form.get('note')
     update_current_symptom({"severity": severity, "severity_note": note})
     session['severity'] = severity
 
     if severity >= 5:
-        update_current_symptom({"severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
+        update_current_symptom({"dispense_status": "cancel", "severity_note": "แนะนำพบแพทย์ (severity >= 5)"})
         session['medicine'] = None
-        return render_template('advise_doctor.html', reason="อาการของคุณอยู่ในระดับค่อนข้างรุนแรง โปรดพบแพทย์หรือเภสัชใกล้บ้านท่าน")
+        return render_template('advise_doctor.html',
+                               reason="อาการของคุณอยู่ในระดับค่อนข้างรุนแรง โปรดพบแพทย์หรือเภสัชใกล้บ้านท่าน")
     else:
         return redirect('/question_pregnant')
+
 
 @app.route('/question_pregnant', methods=['GET', 'POST'])
 @require_login
@@ -460,22 +513,33 @@ def question_pregnant():
         session['is_pregnant'] = pregnant
 
         symptom_type_id = session.get('symptom_type_id')
-        q = supabase.table('symptom_types').select('name', 'suggested_medicine')\
+        q = supabase.table('symptom_types').select('name, medicine_id')\
              .eq('symptom_type_id', symptom_type_id).execute()
-        name = q.data[0]['name'] if q.data else ""
-        med = q.data[0]['suggested_medicine'] if q.data else ""
+        row = q.data[0] if q.data else {}
+        name = row.get("name", "")
+        med_id = row.get("medicine_id")
+
+        # ดึงชื่อยา
+        med_name = None
+        if med_id:
+            m = supabase.table("medicines").select("medicine_name").eq("medicine_id", med_id).execute()
+            if m.data:
+                med_name = m.data[0]["medicine_name"]
 
         if pregnant:
-            update_current_symptom({"severity_note": "แนะนำให้พบแพทญ์เนื่องจากอยู่ระหว่างตั้งครรภ์", "is_pregnant": True})
+            update_current_symptom({"is_pregnant": True, "dispense_status": "cancel",
+                                    "severity_note": "แนะนำพบแพทย์ (ตั้งครรภ์)"})
             session['medicine'] = None
-            return render_template('advise_doctor.html', reason="คุณอยู่ในระหว่างตั้งครรภ์ โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
-        elif name == "กรดไหลย้อน":
-            update_current_symptom({"severity_note": f"แนะนำยา: {med}"})
-            session['medicine'] = med
+            return render_template('advise_doctor.html',
+                                   reason="คุณอยู่ในระหว่างตั้งครรภ์ โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
+        elif name == "กรดไหลย้อน" and med_id:
+            update_current_symptom({"medicine_id": med_id})
+            session['medicine'] = med_name
             return redirect('/recommend_medicine')
         else:
             return redirect('/question_allergy')
     return render_template('pregnant.html')
+
 
 @app.route('/question_allergy', methods=['GET', 'POST'])
 @require_login
@@ -490,23 +554,44 @@ def question_allergy():
         if allergy:
             update_current_symptom({
                 "severity": severity,
-                "severity_note": "แนะนำพบแพทย์ (แพ้พาราเซตามอล)",
                 "is_pregnant": is_pregnant,
-                "paracetamol_allergy": allergy
+                "paracetamol_allergy": allergy,
+                "dispense_status": "cancel",
+                "severity_note": "แนะนำพบแพทย์ (แพ้พาราเซตามอล)"
             })
             session['medicine'] = None
-            return render_template("advise_doctor.html", reason="เนื่องจากคุณแพ้ยาพาราเซตามอล โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
+            return render_template("advise_doctor.html",
+                                   reason="เนื่องจากคุณแพ้ยาพาราเซตามอล โปรดพบแพทย์หรือเภสัชใกล้บ้านท่านเพื่อรับการรักษาเฉพาะทาง")
         else:
-            q = supabase.table('symptom_types').select('suggested_medicine').eq('symptom_type_id', symptom_type_id).execute()
-            medicine = q.data[0]['suggested_medicine'] if q.data else "พาราเซตามอล 500mg"
-            update_current_symptom({
-                "severity": severity,
-                "severity_note": f"แนะนำยา: {medicine}",
-                "is_pregnant": is_pregnant,
-                "paracetamol_allergy": allergy
-            })
-            session['medicine'] = medicine
-            return redirect('/recommend_medicine')
+            # กรณีไม่แพ้ ให้เลือกยาตาม symptom_types
+            q = supabase.table('symptom_types').select('medicine_id').eq('symptom_type_id', symptom_type_id).execute()
+            med_id = q.data[0]['medicine_id'] if q.data else None
+
+            med_name = None
+            if med_id:
+                m = supabase.table("medicines").select("medicine_name").eq("medicine_id", med_id).execute()
+                if m.data:
+                    med_name = m.data[0]["medicine_name"]
+
+            if med_id:
+                update_current_symptom({
+                    "severity": severity,
+                    "is_pregnant": is_pregnant,
+                    "paracetamol_allergy": allergy,
+                    "medicine_id": med_id
+                })
+                session['medicine'] = med_name
+                return redirect('/recommend_medicine')
+            else:
+                update_current_symptom({
+                    "severity": severity,
+                    "is_pregnant": is_pregnant,
+                    "paracetamol_allergy": allergy,
+                    "dispense_status": "cancel",
+                    "severity_note": "ไม่พบยาที่เหมาะสม"
+                })
+                session['medicine'] = None
+                return render_template("advise_doctor.html", reason="ไม่พบยาที่เหมาะสม โปรดปรึกษาแพทย์")
     return render_template("allergy.html")
 
 # ----------------------- Dispense / Finish -----------------------
@@ -517,6 +602,15 @@ def recommend_medicine():
     if not medicine:
         flash("ไม่สามารถแสดงผลการแนะนำยาได้", "error")
         return redirect('/dashboard')
+
+    # map medicine_name -> medicine_id
+    med = supabase.table("medicines").select("medicine_id")\
+        .eq("medicine_name", medicine).execute().data
+    if med:
+        med_id = med[0]['medicine_id']
+        session['medicine_id'] = med_id
+        update_current_symptom({"medicine_id": med_id})
+
     info = get_medicine_info(medicine)
     return render_template("recommend_result.html",
                            medicine=medicine,
@@ -525,43 +619,22 @@ def recommend_medicine():
                            usage=info.get("usage"),
                            warning=info.get("warning"))
 
+
 @app.route('/dispense_success', methods=['GET'])
 @require_login
 def dispense_success():
     medicine = session.get('medicine')
-    if not medicine:
+    med_id   = session.get('medicine_id')
+    if not medicine or not med_id:
         flash("ไม่พบข้อมูลยา", "error")
         return redirect('/dashboard')
 
     try:
-        # update symptoms
-        update_current_symptom({"dispense_status": "success"})
+        # อัปเดตสถานะ success + บันทึกยา
+        update_current_symptom({"dispense_status": "success", "medicine_id": med_id})
 
-        # หา slot ของยา
-        slot = SLOT_BY_MEDICINE.get(medicine)
-        if slot:
-            # เตรียมค่า
-            user = session.get('username', 'system')
-            req_id = str(session.get('symptom_id', ''))
-
-            # 1) insert ลง stock_ledger
-            supabase.table("stock_ledger").insert({
-                "slot": slot,
-                "qty_change": -1,
-                "reason": "dispense",
-                "request_id": req_id,
-                "actor": user,
-                "note": f"dispensed {medicine}"
-            }).execute()
-
-            # 2) update slots.current_stock
-            current = supabase.table("slots").select("current_stock")\
-                        .eq("slot", slot).execute().data
-            if current:
-                new_val = max(0, (current[0]["current_stock"] or 0) - 1)
-                supabase.table("slots")\
-                    .update({"current_stock": new_val})\
-                    .eq("slot", slot).execute()
+        # เรียก RPC ให้ stock -1
+        supabase.rpc("decrement_stock", {"p_medicine_id": med_id, "p_qty": 1}).execute()
 
     except Exception as e:
         app.logger.error(f"Error updating stock for {medicine}: {e}")
@@ -570,17 +643,18 @@ def dispense_success():
                            medicine=medicine,
                            redirect_ms=4000)
 
-
 MAX_RETRY = 2
 DEFAULT_MAX_WAIT_MS = 60000
 
 @app.route('/dispense_loading', methods=['GET', 'POST'])
 @require_login
 def dispense_loading():
+    # 1) บันทึกการยอมรับรับยา
     if request.method == 'POST':
         update_current_symptom({"accept_medicine": "รับยา"})
         session['dispense_attempts'] = session.get('dispense_attempts', 0)
 
+    # 2) ตรวจข้อมูลยา + ช่อง
     medicine = session.get('medicine')
     if not medicine or medicine not in SLOT_BY_MEDICINE:
         flash("ไม่พบข้อมูลช่องสำหรับยาที่เลือก", "error")
@@ -590,53 +664,91 @@ def dispense_loading():
     info = get_medicine_info(medicine) if medicine else {"doctor_advice": "-"}
     doctor_advice = info.get("doctor_advice", "-")
 
+    # 3) เตรียมไฟล์เสียงจาก static/sounds
+    #    - ให้ get_medicine_info คืน key เช่น {"audio_file": "paracetamol.mp3"}
+    #    - ถ้าไม่มีให้ fallback เป็น default.mp3 (คุณต้องมีไฟล์นี้ใน static/sounds/)
+    audio_file = (info.get("audio") or "default.mp3").strip()
+    audio_url  = url_for('static', filename=f'sounds/{audio_file}')
+
+    # 4) สร้าง request_id กันสั่งซ้ำ (ใช้ symptom_id ปัจจุบัน)
+    request_id = str(session.get('symptom_id', ''))
+
+    # 5) Trigger เครื่องจ่ายยาแบบไม่บล็อก (อย่าทำให้หน้าเว็บค้าง)
     try:
-        resp = iot_dispense(slot)
-        if not resp.get("ok", False):
-            flash(f"สั่งจ่ายยาไม่สำเร็จ: {resp}", "error")
-            return redirect('/dispense_failed')
+        # ถ้า iot_client.iot_dispense() รองรับ query เพิ่มเติม (เช่น request_id) ให้ส่งเลย:
+        # iot_dispense(slot, request_id=request_id)
+        #
+        # แต่ถ้ายังรับได้แค่ slot ให้ใช้ fallback call ด้านล่างแทน:
+        from iot_client import get_dispenser_url
+        import requests
+        base = get_dispenser_url().rstrip('/')
+        # /dispense?slot=<n>&request_id=<id>
+        resp = requests.get(f"{base}/dispense", params={"slot": slot, "request_id": request_id}, timeout=4.0)
+        resp.raise_for_status()
+        # ไม่ต้องตรวจผล ณ ตอนนี้ ให้หน้า loading ไปโพล /iot/status เอง
     except Exception as e:
-        flash(f"เชื่อมต่อเครื่องจ่ายยาไม่ได้: {e}", "error")
-        return redirect('/dispense_failed')
+        app.logger.warning(f"IoT trigger error: {e} (slot={slot}, req={request_id})")
+        # ไม่ทำให้หน้าโหลดล้ม — ให้หน้า loading โพล /iot/status ตามปกติ
 
-    return render_template("loading_dispense.html",
-                           medicine=medicine,
-                           doctor_advice=doctor_advice,
-                           max_wait_ms=DEFAULT_MAX_WAIT_MS,
-                           poll_every_ms=400)
+    # 6) ส่งค่าที่หน้า loading ต้องใช้สำหรับโพล/นับถอยหลัง/เสียง
+    MAX_WAIT_MS   = 60000   # 60 วินาที (ปรับได้)
+    POLL_EVERY_MS = 800     # โพลทุก 0.8 วินาที
 
+    return render_template(
+        "loading_dispense.html",
+        medicine=medicine,
+        doctor_advice=doctor_advice,
+        max_wait_ms=MAX_WAIT_MS,
+        poll_every_ms=POLL_EVERY_MS,
+        audio_url=audio_url,  
+    )
+  
 @app.route('/decline_medicine', methods=['POST'])
 @require_login
 def decline_medicine():
-    update_current_symptom({"accept_medicine": "ไม่รับยา"})
+    # ผู้ใช้ปฏิเสธการรับยา → บันทึกลงเคส แล้วค่อยเคลียร์ session บางส่วน
+    update_current_symptom({"accept_medicine": "ไม่รับยา", "dispense_status": "cancel"})
+    # เคลียร์ตัวเลือกยาหน้านี้ (เก็บ symptom_id ไว้จนกว่าจะถึง goodbye เพื่อความชัวร์)
     session.pop('medicine', None)
-    session.pop('symptom_id', None)
+    session.pop('medicine_id', None)
     return redirect('/goodbye')
+
 
 @app.route('/goodbye')
 def goodbye():
+    # ออกจาก flow แล้วค่อยล้าง session ทั้งหมด
     session.clear()
     return render_template("goodbye.html")
 
+
 @app.route('/dispense_success_cb', methods=['POST'])
 def dispense_success_cb():
+    """
+    webhook/callback จาก ESP32 (ถ้าใช้): แจ้งว่าสำเร็จ
+    - อัปเดตที่ case_logs (schema ใหม่)
+    - ถ้าไม่มี symptom_id ใน payload ให้ใช้เคสปัจจุบันใน session
+    """
     data = request.get_json(silent=True) or {}
     try:
         if "symptom_id" in data:
-            supabase.table('symptoms').update({"dispense_status": "success"})\
-                    .eq('symptom_id', int(data["symptom_id"])).execute()
+            sid = int(data["symptom_id"])
+            supabase.table('case_logs').update({"dispense_status": "success"}) \
+                   .eq('symptom_id', sid).execute()
         else:
             update_current_symptom({"dispense_status": "success"})
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}, 500
 
+
 @app.route('/dispense_failed')
 @require_login
 def dispense_failed():
+    # โหมดล้มเหลว/หมดเวลา
     update_current_symptom({"dispense_status": "timeout"})
     attempts = session.get('dispense_attempts', 0)
     return render_template('dispense_failed.html', attempts=attempts, max_retry=MAX_RETRY)
+
 
 @app.route('/dispense_retry', methods=['POST'])
 @require_login
@@ -645,19 +757,21 @@ def dispense_retry():
     if attempts >= MAX_RETRY:
         flash("พยายามจ่ายยาครบจำนวนครั้งแล้ว กรุณาติดต่อเจ้าหน้าที่", "warning")
         return redirect('/dispense_failed')
+
     session['dispense_attempts'] = attempts + 1
     update_current_symptom({"dispense_status": f"retry{session['dispense_attempts']}"})
     return redirect('/dispense_loading')
 
+
 @app.route('/dispense_cancel', methods=['POST'])
 @require_login
 def dispense_cancel():
+    # ผู้ใช้กดยกเลิกกลางคัน
     update_current_symptom({"dispense_status": "cancel"})
     return redirect('/goodbye')
 
 
 # ----------------------- Entrypoint -----------------------
-
 @app.get("/dash")
 @require_login
 @require_admin
@@ -665,6 +779,6 @@ def dash_page():
     return render_template("dash.html")
 
 
-
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
+

@@ -1,56 +1,111 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="UTF-8" />
-  <title>จ่ายยาสำเร็จ</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-  <style>
-    body{
-      min-height:100vh; display:flex; align-items:center; justify-content:center;
-      background: linear-gradient(135deg,#e8f7ff 0%,#f7fbff 100%);
-      font-family: "Prompt","Noto Sans Thai",system-ui,Arial,sans-serif;
-    }
-    .card-success{
-      max-width: 560px; width: 100%; border-radius: 20px; padding: 28px;
-      box-shadow: 0 12px 40px rgba(0,0,0,.08);
-      text-align: center; background:#fff;
-    }
-    .icon{
-      font-size: 64px; color: #16a34a;
-    }
-  </style>
+    <meta charset="UTF-8" />
+    <title>จ่ายยาสำเร็จ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f4f7fc;
+            font-family: "Prompt", "Noto Sans Thai", system-ui, Arial, sans-serif;
+            padding: 1rem;
+        }
+        .card-success {
+            max-width: 580px;
+            width: 100%;
+            border-radius: 1.5rem; /* 24px */
+            padding: 2.5rem;
+            box-shadow: 0 16px 40px rgba(0, 51, 128, .1);
+            text-align: center;
+            background: #fff;
+            border: 0;
+        }
+        .icon-wrapper {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 1.5rem auto;
+            background-color: #e2fbeB;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .icon {
+            font-size: 56px;
+            color: #16a34a;
+        }
+        h3 {
+            font-weight: 700;
+            color: #1a2b48;
+        }
+        .medicine-name {
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: #0d6efd;
+        }
+        .countdown-text {
+            color: #6c757d;
+        }
+        .progress {
+            height: 6px;
+            border-radius: 99px;
+        }
+    </style>
 </head>
 <body>
-  <div class="card-success">
-    <div class="icon mb-3"><i class="bi bi-check-circle-fill"></i></div>
-    <h3 class="fw-bold mb-2">จ่ายยาสำเร็จ</h3>
-    <p class="mb-1">ระบบได้ทำการจ่ายยาเรียบร้อยแล้ว</p>
-    <p class="text-primary fw-semibold mb-3">{{ medicine }}</p>
-
-    <div class="alert alert-success py-2 mb-4">
-      ขอบคุณที่ใช้บริการ โปรดตรวจสอบยาของท่านที่ช่องรับยา
+    <div class="card card-success">
+        <div class="icon-wrapper">
+            <div class="icon"><i class="bi bi-check-lg"></i></div>
+        </div>
+        <h3 class="mb-2">จ่ายยาสำเร็จ!</h3>
+        <p class="text-muted">ระบบได้ทำการจ่ายยา <span class="medicine-name">{{ medicine }}</span> เรียบร้อยแล้ว</p>
+        
+        <div class="alert alert-success border-0 mt-3" role="alert">
+            <i class="bi bi-info-circle-fill me-2"></i>
+            <strong>ขอบคุณที่ใช้บริการ</strong> โปรดตรวจสอบยาที่ช่องรับยา
+        </div>
+        
+        <div class="mt-4">
+            <p class="countdown-text mb-2" id="countdown">กำลังนำท่านออกจากระบบใน 10 วินาที...</p>
+            <div class="progress">
+                <div id="countdown-bar" class="progress-bar bg-primary" role="progressbar" style="width: 100%" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+        </div>
     </div>
 
-    <p class="text-muted mt-3 mb-0" id="countdown"></p>
-  </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const countdownElement = document.getElementById('countdown');
+            const countdownBar = document.getElementById('countdown-bar');
+            let timeLeft = 10;
+            
+            const countdownInterval = setInterval(() => {
+                timeLeft--;
+                
+                // Update text
+                countdownElement.textContent = `กำลังนำท่านออกจากระบบใน ${timeLeft} วินาที...`;
+                
+                // Update progress bar
+                const percentage = (timeLeft / 10) * 100;
+                countdownBar.style.width = percentage + '%';
 
-  <script>
-    // นับถอยหลังแล้วไปหน้า goodbye อัตโนมัติ
-    const redirectMs = {{ redirect_ms|default(4000)|int }};
-    const targetUrl  = "{{ url_for('goodbye') }}";
-    const cdEl = document.getElementById('countdown');
-
-    let remain = Math.ceil(redirectMs/1000);
-    cdEl.textContent = `กำลังพาไปหน้าขอบคุณใน ${remain} วินาที…`;
-    const t1 = setInterval(()=>{
-      remain -= 1;
-      if (remain <= 0) { clearInterval(t1); }
-      else { cdEl.textContent = `กำลังพาไปหน้าขอบคุณใน ${remain} วินาที…`; }
-    }, 1000);
-
-    setTimeout(()=>{ window.location.replace(targetUrl); }, redirectMs);
-  </script>
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+                    window.location.href = '/goodbye';
+                }
+            }, 1000); // Run every 1 second
+        });
+    </script>
 </body>
 </html>
